@@ -31,6 +31,9 @@ document.addEventListener('DOMContentLoaded', () => {
   // Check stored star status
   chrome.storage.local.get(['hasStarred', 'activeCourseState', 'isRunning'], (res) => {
     hasStarred = Boolean(res.hasStarred);
+    if (!hasStarred) {
+      starGateModal.style.display = 'flex';
+    }
     if (res.activeCourseState && res.isRunning) {
       updateUi(res.activeCourseState, false);
     }
@@ -175,6 +178,13 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  document.getElementById('github-star-btn')?.addEventListener('click', (e) => {
+    // If not starred or user clicks star badge, show gate modal
+    if (!hasStarred) {
+      starGateModal.style.display = 'flex';
+    }
+  });
+
   startBtn.addEventListener('click', () => {
     chrome.storage.local.get(['hasStarred'], (res) => {
       hasStarred = Boolean(res.hasStarred);
@@ -184,6 +194,12 @@ document.addEventListener('DOMContentLoaded', () => {
         startAutomation();
       }
     });
+  });
+
+  const gateCloseBtn = document.getElementById('gate-close-btn');
+
+  gateCloseBtn?.addEventListener('click', () => {
+    starGateModal.style.display = 'none';
   });
 
   gateStarBtn?.addEventListener('click', () => {
@@ -206,8 +222,15 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   resumeBtn.addEventListener('click', () => {
-    executeTabAction('RESUME', () => {
-      updateUi({ isRunning: true, isPausedForUser: false }, isTargetTabActive);
+    chrome.storage.local.get(['hasStarred'], (res) => {
+      hasStarred = Boolean(res.hasStarred);
+      if (!hasStarred) {
+        starGateModal.style.display = 'flex';
+      } else {
+        executeTabAction('RESUME', () => {
+          updateUi({ isRunning: true, isPausedForUser: false }, isTargetTabActive);
+        });
+      }
     });
   });
 

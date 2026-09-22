@@ -14,8 +14,8 @@
   const isCoursera = window.location.hostname.includes('coursera.org');
 
   // Load initial settings
-  chrome.storage.local.get(['isRunning', 'seekOffset'], (res) => {
-    isRunning = Boolean(res.isRunning);
+  chrome.storage.local.get(['isRunning', 'seekOffset', 'hasStarred'], (res) => {
+    isRunning = Boolean(res.isRunning) && Boolean(res.hasStarred);
     seekOffset = res.seekOffset || 2.5;
     if (isRunning) startAutomationLoop();
   });
@@ -23,13 +23,21 @@
   // Listen for popup messages
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'START') {
-      isRunning = true;
-      isPausedForUser = false;
-      chrome.storage.local.set({ isRunning: true, isPausedForUser: false });
-      logToPopup(`Starting CoursePilot (${isCoursera ? 'Coursera' : 'LinkedIn Learning'})...`);
-      syncStateToStorage();
-      startAutomationLoop();
-      sendResponse({ status: 'STARTED' });
+      chrome.storage.local.get(['hasStarred'], (res) => {
+        if (!res.hasStarred) {
+          logToPopup('Please star the GitHub repo to unlock CoursePilot.', 'warning');
+          sendResponse({ status: 'STAR_REQUIRED' });
+          return;
+        }
+        isRunning = true;
+        isPausedForUser = false;
+        chrome.storage.local.set({ isRunning: true, isPausedForUser: false });
+        logToPopup(`Starting CoursePilot (${isCoursera ? 'Coursera' : 'LinkedIn Learning'})...`);
+        syncStateToStorage();
+        startAutomationLoop();
+        sendResponse({ status: 'STARTED' });
+      });
+      return true;
     } else if (request.action === 'STOP') {
       isRunning = false;
       isPausedForUser = false;

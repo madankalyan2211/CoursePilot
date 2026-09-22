@@ -69,12 +69,30 @@ body {
   font-weight: 700;
   text-decoration: none;
   transition: all 0.2s ease;
+  cursor: pointer;
 }
 
 .github-star-badge:hover {
   background: rgba(255, 214, 10, 0.25);
   border-color: #ffd60a;
   transform: translateY(-1px);
+}
+
+.github-star-badge.starred {
+  background: rgba(48, 209, 88, 0.15);
+  border-color: rgba(48, 209, 88, 0.45);
+  color: #30d158;
+  box-shadow: 0 0 10px rgba(48, 209, 88, 0.2);
+}
+
+.github-star-badge.starred svg {
+  fill: #30d158;
+  stroke: #30d158;
+}
+
+.github-star-badge.starred:hover {
+  background: rgba(48, 209, 88, 0.25);
+  border-color: #30d158;
 }
 
 .brand {

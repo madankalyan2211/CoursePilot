@@ -28,9 +28,25 @@ document.addEventListener('DOMContentLoaded', () => {
   let targetTabId = null;
   let isTargetTabActive = true;
 
+  // Star badge UI updater
+  function updateStarBadgeUi() {
+    const starBtn = document.getElementById('github-star-btn');
+    const starText = document.getElementById('github-star-text');
+    if (hasStarred) {
+      starBtn?.classList.add('starred');
+      if (starText) starText.innerText = 'Starred';
+      starBtn?.setAttribute('title', 'You have Starred CoursePilot on GitHub!');
+    } else {
+      starBtn?.classList.remove('starred');
+      if (starText) starText.innerText = 'Star';
+      starBtn?.setAttribute('title', 'Star CoursePilot on GitHub');
+    }
+  }
+
   // Check stored star status
   chrome.storage.local.get(['hasStarred', 'activeCourseState', 'isRunning'], (res) => {
     hasStarred = Boolean(res.hasStarred);
+    updateStarBadgeUi();
     if (!hasStarred) {
       starGateModal.style.display = 'flex';
     }
@@ -230,6 +246,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (rawUser.toLowerCase() === 'madankalyan2211') {
       hasStarred = true;
       chrome.storage.local.set({ hasStarred: true, githubUsername: rawUser });
+      updateStarBadgeUi();
 
       if (gateStatusMsg) {
         gateStatusMsg.className = 'gate-status-msg success';
@@ -280,6 +297,7 @@ document.addEventListener('DOMContentLoaded', () => {
           document.getElementById('gate-fallback-activate')?.addEventListener('click', () => {
             hasStarred = true;
             chrome.storage.local.set({ hasStarred: true, githubUsername: rawUser });
+            updateStarBadgeUi();
             starGateModal.style.display = 'none';
             addLog(`✨ Activated for @${rawUser} — Automation Unlocked!`, 'success');
             startAutomation();
@@ -303,6 +321,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (hasStarredTarget) {
         hasStarred = true;
         chrome.storage.local.set({ hasStarred: true, githubUsername: rawUser });
+        updateStarBadgeUi();
 
         if (gateStatusMsg) {
           gateStatusMsg.className = 'gate-status-msg success';
@@ -327,6 +346,7 @@ document.addEventListener('DOMContentLoaded', () => {
           document.getElementById('gate-instant-unlock')?.addEventListener('click', () => {
             hasStarred = true;
             chrome.storage.local.set({ hasStarred: true, githubUsername: rawUser });
+            updateStarBadgeUi();
             starGateModal.style.display = 'none';
             addLog(`✨ Activated Star for @${rawUser} — Automation Unlocked!`, 'success');
             startAutomation();
@@ -345,6 +365,7 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('gate-offline-unlock')?.addEventListener('click', () => {
           hasStarred = true;
           chrome.storage.local.set({ hasStarred: true, githubUsername: rawUser });
+          updateStarBadgeUi();
           starGateModal.style.display = 'none';
           addLog(`✨ Activated for @${rawUser} — Automation Unlocked!`, 'success');
           startAutomation();

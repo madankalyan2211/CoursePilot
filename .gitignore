@@ -26,3 +26,4 @@ coursepilot-extension/
 # Environment variables
 .env
 .env.local
+node_modules

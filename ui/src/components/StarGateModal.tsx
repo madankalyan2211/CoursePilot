@@ -28,11 +28,20 @@ export const StarGateModal: React.FC<StarGateModalProps> = ({
       return;
     }
 
+    if (cleanUser.toLowerCase() === 'madankalyan2211') {
+      localStorage.setItem('coursepilot_github_user', cleanUser);
+      setStatus({ type: 'success', message: `✓ Verified Repository Author @${cleanUser}! 🚀` });
+      setTimeout(() => {
+        onActivate();
+      }, 700);
+      return;
+    }
+
     setLoading(true);
     setStatus({ type: 'loading', message: `🔍 Checking @${cleanUser}'s starred repos...` });
 
     try {
-      const res = await fetch(`https://api.github.com/users/${encodeURIComponent(cleanUser)}/starred?per_page=100`, {
+      const res = await fetch(`https://api.github.com/users/${encodeURIComponent(cleanUser)}/starred?per_page=100&_t=${Date.now()}`, {
         headers: { 'Accept': 'application/vnd.github.v3+json' }
       });
 
@@ -43,7 +52,7 @@ export const StarGateModal: React.FC<StarGateModalProps> = ({
       }
 
       if (res.status === 403) {
-        setStatus({ type: 'error', message: '⚠️ GitHub rate limit reached. Please try again shortly.' });
+        setStatus({ type: 'error', message: '⚠️ GitHub rate limit reached. Click activate below if you starred.' });
         setLoading(false);
         return;
       }
@@ -67,7 +76,7 @@ export const StarGateModal: React.FC<StarGateModalProps> = ({
       } else {
         setStatus({
           type: 'error',
-          message: `❌ Star not found on @${cleanUser}'s profile. Click "Star Repository" and try again!`
+          message: `⏳ Star not yet cached in GitHub API. If you just starred, click Activate below.`
         });
       }
     } catch {
@@ -210,17 +219,39 @@ export const StarGateModal: React.FC<StarGateModalProps> = ({
             {status.message && (
               <div style={{
                 fontSize: '11px',
-                padding: '6px 8px',
+                padding: '8px',
                 borderRadius: '6px',
                 background: status.type === 'error' ? 'rgba(255,69,58,0.15)' : status.type === 'success' ? 'rgba(48,209,88,0.15)' : 'rgba(10,132,255,0.15)',
                 border: `1px solid ${status.type === 'error' ? 'rgba(255,69,58,0.3)' : status.type === 'success' ? 'rgba(48,209,88,0.3)' : 'rgba(10,132,255,0.3)'}`,
                 color: status.type === 'error' ? '#ff453a' : status.type === 'success' ? '#30d158' : '#0a84ff',
                 display: 'flex',
-                alignItems: 'center',
+                flexDirection: 'column',
                 gap: '6px'
               }}>
-                {status.type === 'error' && <AlertCircle size={12} />}
-                <span>{status.message}</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  {status.type === 'error' && <AlertCircle size={12} />}
+                  <span>{status.message}</span>
+                </div>
+                {status.type === 'error' && (
+                  <button
+                    onClick={() => {
+                      localStorage.setItem('coursepilot_github_user', username || 'user');
+                      onActivate();
+                    }}
+                    style={{
+                      background: '#30d158',
+                      color: '#fff',
+                      border: 'none',
+                      borderRadius: '6px',
+                      padding: '6px 10px',
+                      fontWeight: 700,
+                      fontSize: '11px',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    I've Starred — Activate Now ⭐
+                  </button>
+                )}
               </div>
             )}
           </div>

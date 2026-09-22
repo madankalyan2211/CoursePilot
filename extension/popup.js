@@ -226,6 +226,25 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
+    // Direct auto-approval for repository author/owner
+    if (rawUser.toLowerCase() === 'madankalyan2211') {
+      hasStarred = true;
+      chrome.storage.local.set({ hasStarred: true, githubUsername: rawUser });
+
+      if (gateStatusMsg) {
+        gateStatusMsg.className = 'gate-status-msg success';
+        gateStatusMsg.style.display = 'block';
+        gateStatusMsg.innerText = `✓ Verified Repository Author @${rawUser}! 🚀`;
+      }
+
+      setTimeout(() => {
+        starGateModal.style.display = 'none';
+        addLog(`✨ Repository Author @${rawUser} — Automation Unlocked!`, 'success');
+        startAutomation();
+      }, 700);
+      return;
+    }
+
     if (gateStatusMsg) {
       gateStatusMsg.className = 'gate-status-msg loading';
       gateStatusMsg.style.display = 'block';
@@ -238,7 +257,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     try {
-      const response = await fetch(`https://api.github.com/users/${encodeURIComponent(rawUser)}/starred?per_page=100`, {
+      // Add cache buster timestamp to avoid CDN stale cache
+      const response = await fetch(`https://api.github.com/users/${encodeURIComponent(rawUser)}/starred?per_page=100&_t=${Date.now()}`, {
         headers: {
           'Accept': 'application/vnd.github.v3+json'
         }
@@ -253,10 +273,17 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       if (response.status === 403) {
-        // GitHub rate limit fallback
+        // GitHub rate limit fallback — provide instant unlock button
         if (gateStatusMsg) {
-          gateStatusMsg.className = 'gate-status-msg error';
-          gateStatusMsg.innerText = '⚠️ GitHub API rate limit reached. Please wait a moment or ensure you have starred the repo.';
+          gateStatusMsg.className = 'gate-status-msg warning';
+          gateStatusMsg.innerHTML = `⚠️ GitHub API rate limit reached.<br><button id="gate-fallback-activate" style="margin-top:6px;width:100%;background:#30d158;color:#fff;border:none;border-radius:6px;padding:6px;font-weight:700;font-size:11px;cursor:pointer;">I've Starred — Activate Now ⭐</button>`;
+          document.getElementById('gate-fallback-activate')?.addEventListener('click', () => {
+            hasStarred = true;
+            chrome.storage.local.set({ hasStarred: true, githubUsername: rawUser });
+            starGateModal.style.display = 'none';
+            addLog(`✨ Activated for @${rawUser} — Automation Unlocked!`, 'success');
+            startAutomation();
+          });
         }
         return;
       }
@@ -288,15 +315,40 @@ document.addEventListener('DOMContentLoaded', () => {
           startAutomation();
         }, 800);
       } else {
+        // Star not yet updated in GitHub API cache or not starred
         if (gateStatusMsg) {
-          gateStatusMsg.className = 'gate-status-msg error';
-          gateStatusMsg.innerText = `❌ Star not found on @${rawUser}'s profile. Click "1. Star Repository on GitHub" and try again!`;
+          gateStatusMsg.className = 'gate-status-msg warning';
+          gateStatusMsg.innerHTML = `
+            <div>⏳ Star not yet cached in GitHub's public feed (takes 1-2 min).</div>
+            <button id="gate-instant-unlock" style="margin-top:6px;width:100%;background:#30d158;color:#fff;border:none;border-radius:6px;padding:7px;font-weight:700;font-size:11px;cursor:pointer;">
+              ✓ I Just Starred (@${rawUser}) — Activate Now ⭐
+            </button>
+          `;
+          document.getElementById('gate-instant-unlock')?.addEventListener('click', () => {
+            hasStarred = true;
+            chrome.storage.local.set({ hasStarred: true, githubUsername: rawUser });
+            starGateModal.style.display = 'none';
+            addLog(`✨ Activated Star for @${rawUser} — Automation Unlocked!`, 'success');
+            startAutomation();
+          });
         }
       }
     } catch (err) {
       if (gateStatusMsg) {
         gateStatusMsg.className = 'gate-status-msg error';
-        gateStatusMsg.innerText = `⚠️ Network error checking GitHub. Please check connection.`;
+        gateStatusMsg.innerHTML = `
+          <div>⚠️ Network error connecting to GitHub.</div>
+          <button id="gate-offline-unlock" style="margin-top:6px;width:100%;background:#30d158;color:#fff;border:none;border-radius:6px;padding:6px;font-weight:700;font-size:11px;cursor:pointer;">
+            I Have Starred — Activate Now ⭐
+          </button>
+        `;
+        document.getElementById('gate-offline-unlock')?.addEventListener('click', () => {
+          hasStarred = true;
+          chrome.storage.local.set({ hasStarred: true, githubUsername: rawUser });
+          starGateModal.style.display = 'none';
+          addLog(`✨ Activated for @${rawUser} — Automation Unlocked!`, 'success');
+          startAutomation();
+        });
       }
     } finally {
       if (gateConfirmBtn) {

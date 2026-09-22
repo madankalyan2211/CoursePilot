@@ -5,7 +5,8 @@
   "description": "Automate repetitive video playback and auto-advance on LinkedIn Learning and Coursera with floating quiz safety pause.",
   "permissions": [
     "storage",
-    "activeTab"
+    "activeTab",
+    "scripting"
   ],
   "host_permissions": [
     "*://*.linkedin.com/learning/*",

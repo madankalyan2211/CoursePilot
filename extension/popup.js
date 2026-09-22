@@ -113,6 +113,31 @@ document.addEventListener('DOMContentLoaded', () => {
     logBox.scrollTop = logBox.scrollHeight;
   }
 
+  function autoInjectAndRetry(tabId, action, onSuccess) {
+    if (chrome.scripting) {
+      chrome.scripting.executeScript({
+        target: { tabId },
+        files: ['content.js']
+      }, () => {
+        if (chrome.runtime.lastError) {
+          addLog('Please refresh the course page tab (⌘R / F5) to reconnect.', 'warning');
+          return;
+        }
+        setTimeout(() => {
+          chrome.tabs.sendMessage(tabId, { action }, (retryRes) => {
+            if (chrome.runtime.lastError) {
+              addLog('Please refresh the course page tab (⌘R / F5) to reconnect.', 'warning');
+            } else if (onSuccess) {
+              onSuccess(retryRes);
+            }
+          });
+        }, 200);
+      });
+    } else {
+      addLog('Please refresh the course page tab (⌘R / F5) to reconnect.', 'warning');
+    }
+  }
+
   // Detect appropriate course tab (current active tab or any open course tab)
   function resolveTargetTab() {
     chrome.tabs.query({ active: true, currentWindow: true }, (currentTabs) => {
@@ -122,11 +147,26 @@ document.addEventListener('DOMContentLoaded', () => {
         // Active tab is already a course tab!
         targetTabId = activeTab.id;
         isTargetTabActive = true;
+        courseName.innerText = activeTab.title.split('|')[0].trim() || 'Course Tab';
+        lessonName.innerText = 'Ready to automate';
+
         chrome.tabs.sendMessage(targetTabId, { action: 'GET_STATE' }, (response) => {
           if (chrome.runtime.lastError || !response) {
-            // Content script not yet loaded or ready
-            courseName.innerText = activeTab.title.split('|')[0].trim() || 'Course Tab';
-            lessonName.innerText = 'Ready to automate';
+            // Auto-inject content script into open course tab
+            if (chrome.scripting) {
+              chrome.scripting.executeScript({
+                target: { tabId: targetTabId },
+                files: ['content.js']
+              }, () => {
+                if (!chrome.runtime.lastError) {
+                  setTimeout(() => {
+                    chrome.tabs.sendMessage(targetTabId, { action: 'GET_STATE' }, (retryResp) => {
+                      if (retryResp) updateUi(retryResp, true);
+                    });
+                  }, 200);
+                }
+              });
+            }
           } else {
             updateUi(response, true);
           }
@@ -138,16 +178,15 @@ document.addEventListener('DOMContentLoaded', () => {
             const courseTab = courseTabs[0];
             targetTabId = courseTab.id;
             isTargetTabActive = false;
+            courseName.innerText = courseTab.title.split('|')[0].trim() || 'Background Course';
+            lessonName.innerText = 'Course open in another tab';
 
             chrome.tabs.sendMessage(targetTabId, { action: 'GET_STATE' }, (response) => {
               if (chrome.runtime.lastError || !response) {
-                // Fallback to storage or tab title
                 chrome.storage.local.get(['activeCourseState', 'isRunning'], (stored) => {
                   if (stored.activeCourseState) {
                     updateUi({ ...stored.activeCourseState, isRunning: stored.isRunning }, false);
                   } else {
-                    courseName.innerText = courseTab.title.split('|')[0].trim() || 'Background Course';
-                    lessonName.innerText = 'Course open in another tab';
                     updateUi({ isRunning: false, isPausedForUser: false }, false);
                   }
                 });
@@ -181,7 +220,12 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     chrome.tabs.sendMessage(targetTabId, { action }, (res) => {
       if (chrome.runtime.lastError) {
-        addLog(`Could not connect to course tab: ${chrome.runtime.lastError.message}`, 'error');
+        const errMsg = chrome.runtime.lastError.message || '';
+        if (errMsg.includes('Receiving end does not exist') || errMsg.includes('Could not establish connection')) {
+          autoInjectAndRetry(targetTabId, action, onSuccess);
+        } else {
+          addLog(`Could not connect to course tab: ${errMsg}`, 'error');
+        }
       } else if (onSuccess) {
         onSuccess(res);
       }

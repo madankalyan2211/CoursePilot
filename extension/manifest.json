@@ -11,6 +11,7 @@
   "host_permissions": [
     "*://*.linkedin.com/*",
     "*://*.coursera.org/*",
+    "*://*.lntedutech.com/*",
     "https://api.github.com/*"
   ],
   "icons": {
@@ -34,7 +35,8 @@
     {
       "matches": [
         "*://*.linkedin.com/*",
-        "*://*.coursera.org/*"
+        "*://*.coursera.org/*",
+        "*://*.lntedutech.com/*"
       ],
       "js": ["content.js"],
       "run_at": "document_idle"

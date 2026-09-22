@@ -4,7 +4,7 @@
 
 [![GitHub Stars](https://img.shields.io/github/stars/madankalyan2211/CoursePilot?style=for-the-badge&logo=github&color=ffd60a)](https://github.com/madankalyan2211/CoursePilot)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
-[![Supported Platforms](https://img.shields.io/badge/Platforms-LinkedIn%20Learning%20%7C%20Coursera-orange?style=for-the-badge)](https://github.com/madankalyan2211/CoursePilot)
+[![Supported Platforms](https://img.shields.io/badge/Platforms-LinkedIn%20Learning%20%7C%20Coursera%20%7C%20L%26T%20EduTech-orange?style=for-the-badge)](https://github.com/madankalyan2211/CoursePilot)
 [![OS Support](https://img.shields.io/badge/OS-Windows%2010%2F11%20%7C%20macOS-blueviolet?style=for-the-badge)](https://github.com/madankalyan2211/CoursePilot)
 
 **Automate repetitive video playback. Keep 100% control of quizzes and learning integrity.**
@@ -17,7 +17,7 @@
 
 ## 🌟 Why CoursePilot?
 
-Watching dozens of tutorial videos back-to-back can be tedious when you just want to progress through modules efficiently. **CoursePilot** is an open-source browser extension and automation tool designed specifically for **LinkedIn Learning** and **Coursera**.
+Watching dozens of tutorial videos back-to-back can be tedious when you just want to progress through modules efficiently. **CoursePilot** is an open-source browser extension and automation tool designed for **LinkedIn Learning**, **Coursera**, and **L&T EduTech**.
 
 * ⏩ **Smart Playback & Seeking** — Automatically seeks smoothly toward video completion without breaking platform progress tracking.
 * ⏭️ **Auto-Advance Topics & Modules** — Smoothly transitions between lessons, chapters, and weekly syllabus items.
@@ -61,10 +61,10 @@ Choose **one** of the two simple ways:
 
 1. Click the **Puzzle piece icon 🧩** in your Chrome toolbar (top right).
 2. Click the **Pin icon 📌** next to **CoursePilot** so it stays visible on your toolbar.
-3. Open any course on [LinkedIn Learning](https://www.linkedin.com/learning) or [Coursera](https://www.coursera.org/learn).
+3. Open any course on [LinkedIn Learning](https://www.linkedin.com/learning), [Coursera](https://www.coursera.org/learn), or [L&T EduTech](https://lntedutech.com/).
 4. Click the **CoursePilot icon** in your toolbar.
 5. Click **START AUTOMATION**.
-   > ⭐ *First-time user? Click "Star Repository on GitHub" and then "I've Starred ⭐ (Activate)" to unlock automation!*
+   > ⭐ *First-time user? Click "Star Repository on GitHub" and then "Verify Star & Activate 🚀" to unlock automation!*
 
 ---
 
@@ -128,7 +128,7 @@ npm run dev
 npm test
 ```
 
-CoursePilot includes a comprehensive test suite with 18 unit and integration tests covering Playwright controllers, DOM completion detectors, and multi-platform syllabus transitions.
+CoursePilot includes a comprehensive test suite with unit and integration tests covering Playwright controllers, DOM completion detectors, and multi-platform syllabus transitions.
 
 ---
 
@@ -137,14 +137,14 @@ CoursePilot includes a comprehensive test suite with 18 unit and integration tes
 ```
 CoursePilot/
 ├── extension/                      # Manifest V3 Chrome Extension
-│   ├── manifest.json               # Dual host permissions (LinkedIn + Coursera)
+│   ├── manifest.json               # Multi-platform host permissions (LinkedIn + Coursera + L&T EduTech)
 │   ├── content.js                  # In-page playback loop & draggable HUD
 │   ├── popup.html                  # Popup dashboard & Star Gate modal
 │   ├── popup.css                   # Windows Fluent / macOS acrylic styling
 │   ├── popup.js                    # Cross-tab state & command routing
 │   └── icons/                      # 16px, 48px, 128px high-res icons
 ├── src/                            # Desktop Automation Engine (Playwright + TypeScript)
-│   ├── linkedin/                   # Selectors & Detectors (Coursera & LinkedIn)
+│   ├── linkedin/                   # Selectors & Detectors (Coursera, L&T EduTech, LinkedIn)
 │   ├── automation/                 # Robust State Machine & Retry Manager
 │   └── server/                     # REST API Server for Desktop UI
 ├── ui/                             # Modern React + Vite Dashboard
@@ -171,7 +171,7 @@ CoursePilot/
 <details>
 <summary><strong>Q: What should I do if the popup says "No Course Open"?</strong></summary>
 <br>
-Simply open a course on <a href="https://www.linkedin.com/learning">LinkedIn Learning</a> or <a href="https://www.coursera.org/learn">Coursera</a> in any tab. CoursePilot will automatically detect the open course even if you are browsing another tab!
+Simply open a course on <a href="https://www.linkedin.com/learning">LinkedIn Learning</a>, <a href="https://www.coursera.org/learn">Coursera</a>, or <a href="https://lntedutech.com">L&T EduTech</a> in any tab. CoursePilot will automatically detect the open course even if you are browsing another tab!
 </details>
 
 <details>
@@ -195,5 +195,6 @@ If CoursePilot saves you time, please give it a **⭐ Star on GitHub** — it he
 ---
 
 <div align="center">
-Built with ❤️ for lifelong learners on LinkedIn Learning and Coursera.
+Built with ❤️ for lifelong learners on LinkedIn Learning, Coursera, and L&T EduTech.
 </div>
+

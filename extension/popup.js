@@ -12,6 +12,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const platformLaunchRow = document.getElementById('platform-launch-row');
   const launchLinkedInBtn = document.getElementById('launch-linkedin-btn');
   const launchCourseraBtn = document.getElementById('launch-coursera-btn');
+  const launchLntBtn = document.getElementById('launch-lnt-btn');
   
   const statusPill = document.getElementById('status-pill');
   const statusText = document.getElementById('status-text');
@@ -57,7 +58,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function isCourseUrl(url) {
     if (!url) return false;
-    return url.includes('linkedin.com/learning') || url.includes('coursera.org');
+    return url.includes('linkedin.com/learning') || url.includes('coursera.org') || url.includes('lntedutech.com');
   }
 
   function updateUi(state, isActiveTab = true) {
@@ -96,7 +97,7 @@ document.addEventListener('DOMContentLoaded', () => {
     statusPill.className = 'status-pill';
     statusText.innerText = 'No Course Open';
     courseName.innerText = 'No Active Course Tab';
-    lessonName.innerText = 'Open LinkedIn Learning or Coursera to begin';
+    lessonName.innerText = 'Open LinkedIn Learning, Coursera, or L&T EduTech to begin';
     
     startBtn.style.display = 'none';
     stopBtn.style.display = 'none';
@@ -172,8 +173,8 @@ document.addEventListener('DOMContentLoaded', () => {
           }
         });
       } else {
-        // Active tab is NOT a course page — search other open tabs for LinkedIn Learning or Coursera
-        chrome.tabs.query({ url: ["*://*.linkedin.com/learning/*", "*://*.coursera.org/*"] }, (courseTabs) => {
+        // Active tab is NOT a course page — search other open tabs for LinkedIn Learning, Coursera, or L&T EduTech
+        chrome.tabs.query({ url: ["*://*.linkedin.com/learning/*", "*://*.coursera.org/*", "*://*.lntedutech.com/*"] }, (courseTabs) => {
           if (courseTabs && courseTabs.length > 0) {
             const courseTab = courseTabs[0];
             targetTabId = courseTab.id;
@@ -220,7 +221,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const chosenTabId = activeIsCourse ? activeTab.id : targetTabId;
 
       if (!chosenTabId) {
-        addLog('No course tab open. Please open LinkedIn Learning or Coursera.', 'warning');
+        addLog('No course tab open. Please open LinkedIn Learning, Coursera, or L&T EduTech.', 'warning');
         return;
       }
 
@@ -491,6 +492,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
   launchCourseraBtn?.addEventListener('click', () => {
     chrome.tabs.create({ url: 'https://www.coursera.org/learn' });
+    window.close();
+  });
+
+  launchLntBtn?.addEventListener('click', () => {
+    chrome.tabs.create({ url: 'https://lntedutech.com' });
     window.close();
   });
 });

@@ -271,7 +271,135 @@ export const COURSERA_SELECTORS = {
   ]
 };
 
-export type PlatformType = 'linkedin' | 'coursera' | 'unknown';
+export const LNT_SELECTORS = {
+  videoPlayer: [
+    'video',
+    'video.vjs-tech',
+    '.video-js video',
+    'video[src]',
+    'iframe[src*="video"]'
+  ],
+
+  playButton: [
+    'button[aria-label="Play" i]',
+    '.vjs-play-control',
+    'button.play-btn',
+    'button.play-button',
+    'button[title="Play" i]'
+  ],
+
+  courseTitle: [
+    'h1.course-title',
+    'h1.course_title',
+    '.course-header h1',
+    '.course-name',
+    'div[class*="courseTitle" i]',
+    'div[class*="course-title" i]',
+    'h1[class*="title" i]',
+    '.breadcrumb-item.active',
+    'header h1'
+  ],
+
+  lessonTitle: [
+    'h1.lesson-title',
+    'h2.lesson-title',
+    'h2.topic-title',
+    'div[class*="lessonTitle" i]',
+    'div[class*="topicTitle" i]',
+    '.active-topic',
+    'li.active .topic-name',
+    'h1[class*="topic" i]',
+    'h2',
+    'h1'
+  ],
+
+  tocContainer: [
+    '.course-curriculum',
+    '.course-syllabus',
+    '.curriculum',
+    '.syllabus',
+    '.course-sidebar',
+    '.sidebar'
+  ],
+
+  tocSections: [
+    '.module-item',
+    '.section-item',
+    '.curriculum-section',
+    'div[class*="section" i]'
+  ],
+
+  tocSectionToggle: [
+    'button[aria-expanded="false"]',
+    '.section-header',
+    '.module-header'
+  ],
+
+  tocItems: [
+    'a[href*="lntedutech.com"]',
+    'li[class*="topic" i]',
+    'li[class*="lesson" i]',
+    'li[class*="item" i]',
+    'div[class*="topic-item" i]',
+    'div[class*="lesson-item" i]'
+  ],
+
+  activeTocItem: [
+    'li.active',
+    'div.active',
+    '.active-topic',
+    'a.active',
+    '[aria-current="true"]'
+  ],
+
+  completionIndicators: [
+    '.completed',
+    '.completed-icon',
+    'svg[data-icon="check"]',
+    '[aria-label*="Completed" i]',
+    'i.fa-check-circle',
+    'i.fa-check'
+  ],
+
+  nextButton: [
+    'button.next-btn',
+    'button.btn-next',
+    'a.next-btn',
+    'a.btn-next',
+    'button[class*="next" i]',
+    'a[class*="next" i]',
+    'button[aria-label*="next" i]',
+    'a[aria-label*="next" i]',
+    'button[title*="next" i]',
+    '.next-button button',
+    '#nextBtn',
+    '#btnNext'
+  ],
+
+  nextUpBanner: [
+    '.autoplay-banner button',
+    '.next-banner button'
+  ],
+
+  assessmentIndicators: [
+    'div[class*="quiz" i]',
+    'div[class*="assessment" i]',
+    'div[class*="question" i]',
+    '.assessment-container',
+    '.test-container',
+    'form[class*="quiz" i]',
+    'form[class*="assessment" i]'
+  ],
+
+  authPrompts: [
+    'a[href*="/login"]',
+    'a[href*="/signin"]',
+    'button:has-text("Login")',
+    'button:has-text("Sign In")'
+  ]
+};
+
+export type PlatformType = 'linkedin' | 'coursera' | 'lnt' | 'unknown';
 
 export function getPlatformSelectors(url: string) {
   if (url && (
@@ -281,6 +409,9 @@ export function getPlatformSelectors(url: string) {
     url.includes('/exam/')
   )) {
     return { platform: 'coursera' as PlatformType, selectors: COURSERA_SELECTORS };
+  }
+  if (url && url.includes('lntedutech.com')) {
+    return { platform: 'lnt' as PlatformType, selectors: LNT_SELECTORS };
   }
   return { platform: 'linkedin' as PlatformType, selectors: LINKEDIN_SELECTORS };
 }

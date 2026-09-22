@@ -1,5 +1,5 @@
 import { Page } from 'playwright';
-import { getPlatformSelectors, COURSERA_SELECTORS, LINKEDIN_SELECTORS, PlatformType } from './selectors.js';
+import { getPlatformSelectors, COURSERA_SELECTORS, LINKEDIN_SELECTORS, LNT_SELECTORS, PlatformType } from './selectors.js';
 
 export interface PageDetectionResult {
   isSupportedPlatform: boolean;
@@ -13,6 +13,9 @@ export class PageDetector {
   public static detectPlatform(url: string): PlatformType {
     if (!url) return 'unknown';
     try {
+      if (url.includes('lntedutech.com')) {
+        return 'lnt';
+      }
       if (url.includes('coursera.org') || url.includes('/learn/') || url.includes('/lecture/') || url.includes('/exam/')) {
         return 'coursera';
       }
@@ -25,10 +28,13 @@ export class PageDetector {
     }
   }
 
-  public static async detectPlatformFromPage(page: Page): Promise<{ platform: PlatformType; selectors: typeof LINKEDIN_SELECTORS | typeof COURSERA_SELECTORS }> {
+  public static async detectPlatformFromPage(page: Page): Promise<{ platform: PlatformType; selectors: typeof LINKEDIN_SELECTORS | typeof COURSERA_SELECTORS | typeof LNT_SELECTORS }> {
     const url = page.url();
     const directPlatform = this.detectPlatform(url);
 
+    if (directPlatform === 'lnt') {
+      return { platform: 'lnt', selectors: LNT_SELECTORS };
+    }
     if (directPlatform === 'coursera') {
       return { platform: 'coursera', selectors: COURSERA_SELECTORS };
     }
@@ -38,6 +44,12 @@ export class PageDetector {
 
     // Inspect DOM if URL is generic/about:blank/localhost
     try {
+      const isLnt = await page.evaluate(() => {
+        return Boolean(document.querySelector('.course-curriculum, .course-syllabus, .active-topic, a[href*="lntedutech.com"]'));
+      });
+      if (isLnt) {
+        return { platform: 'lnt', selectors: LNT_SELECTORS };
+      }
       const isCoursera = await page.evaluate(() => {
         return Boolean(document.querySelector('.rc-CourseNav, [data-e2e="course-link"], [data-e2e="item-name"], .rc-ItemPage, video.c-video, .rc-Quiz, .rc-LessonsList'));
       });
@@ -59,7 +71,9 @@ export class PageDetector {
       const isCoursera = parsed.hostname.includes('coursera.org') &&
                          (parsed.pathname.includes('/learn/') || parsed.pathname.includes('/lecture/'));
 
-      return isLinkedIn || isCoursera;
+      const isLnt = parsed.hostname.includes('lntedutech.com');
+
+      return isLinkedIn || isCoursera || isLnt;
     } catch {
       return false;
     }

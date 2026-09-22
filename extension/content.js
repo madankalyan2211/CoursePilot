@@ -12,6 +12,8 @@
   let seekOffset = 2.5;
 
   const isCoursera = window.location.hostname.includes('coursera.org');
+  const isLnt = window.location.hostname.includes('lntedutech.com');
+  const platformName = isLnt ? 'L&T EduTech' : (isCoursera ? 'Coursera' : 'LinkedIn Learning');
 
   // Load initial settings
   chrome.storage.local.get(['isRunning', 'seekOffset', 'hasStarred'], (res) => {
@@ -29,7 +31,7 @@
       isRunning = true;
       isPausedForUser = false;
       chrome.storage.local.set({ isRunning: true, isPausedForUser: false });
-      logToPopup(`Starting CoursePilot (${isCoursera ? 'Coursera' : 'LinkedIn Learning'})...`);
+      logToPopup(`Starting CoursePilot (${platformName})...`);
       syncStateToStorage();
       startAutomationLoop();
     });
@@ -122,7 +124,17 @@
     
     // Multi-platform title extraction
     let courseTitle = '';
-    const courseSelectors = isCoursera ? [
+    const courseSelectors = isLnt ? [
+      'h1.course-title',
+      'h1.course_title',
+      '.course-header h1',
+      '.course-name',
+      'div[class*="courseTitle" i]',
+      'div[class*="course-title" i]',
+      'h1[class*="title" i]',
+      '.breadcrumb-item.active',
+      'header h1'
+    ] : (isCoursera ? [
       'a[data-e2e="course-link"]',
       'div.course-name',
       'h1[data-e2e="course-title"]',
@@ -133,7 +145,7 @@
       'h1.classroom-nav__course-title',
       'h1.classroom-header__title',
       'header h1'
-    ];
+    ]);
 
     for (const sel of courseSelectors) {
       const el = document.querySelector(sel);
@@ -144,7 +156,18 @@
     }
 
     let lessonTitle = '';
-    const lessonSelectors = isCoursera ? [
+    const lessonSelectors = isLnt ? [
+      'h1.lesson-title',
+      'h2.lesson-title',
+      'h2.topic-title',
+      'div[class*="lessonTitle" i]',
+      'div[class*="topicTitle" i]',
+      '.active-topic',
+      'li.active .topic-name',
+      'h1[class*="topic" i]',
+      'h2',
+      'h1'
+    ] : (isCoursera ? [
       'h1.title',
       'h1.item-title',
       'h1[data-e2e="item-name"]',
@@ -155,7 +178,7 @@
       'h2[data-test-item-title]',
       'h1.classroom-nav__item-title',
       'h1[class*="lesson-title" i]'
-    ];
+    ]);
 
     for (const sel of lessonSelectors) {
       const el = document.querySelector(sel);
@@ -167,7 +190,7 @@
 
     return {
       url: currentUrl,
-      platform: isCoursera ? 'Coursera' : 'LinkedIn Learning',
+      platform: platformName,
       courseTitle: courseTitle || document.title.split('|')[0].split('-')[0].trim(),
       lessonTitle: lessonTitle || 'Current Lesson',
       isRunning,
@@ -176,15 +199,17 @@
   }
 
   function isAssessmentPage() {
-    const url = window.location.pathname;
+    const url = window.location.pathname.toLowerCase();
     // URL-based check
     if (
-      url.includes('/quiz/') || 
-      url.includes('/assessment/') || 
-      url.includes('/exam/') || 
-      url.includes('/assignment-submission/') ||
-      url.includes('/peer-review/') ||
-      url.includes('/ungradedWidget/')
+      url.includes('/quiz') || 
+      url.includes('/assessment') || 
+      url.includes('/exam') || 
+      url.includes('/test/') ||
+      url.includes('/test-') ||
+      url.includes('/assignment-submission') ||
+      url.includes('/peer-review') ||
+      url.includes('/ungradedwidget')
     ) {
       return true;
     }
@@ -208,7 +233,12 @@
       'form[data-e2e*="quiz"]',
       'form.rc-QuizForm',
       'div[data-e2e="ungraded-widget"]',
-      'div[data-e2e="quiz-prompt"]'
+      'div[data-e2e="quiz-prompt"]',
+      'div[class*="quiz" i]',
+      'div[class*="assessment" i]',
+      'div[class*="question" i]',
+      '.assessment-container',
+      '.test-container'
     ];
 
     for (const sel of assessmentSelectors) {
@@ -294,7 +324,20 @@
     logToPopup('Advancing to next topic video...', 'info');
 
     // Strategy 1: Dedicated classroom / item next buttons
-    const nextButtonSelectors = isCoursera ? [
+    const nextButtonSelectors = isLnt ? [
+      'button.next-btn',
+      'button.btn-next',
+      'a.next-btn',
+      'a.btn-next',
+      'button[class*="next" i]',
+      'a[class*="next" i]',
+      'button[aria-label*="next" i]',
+      'a[aria-label*="next" i]',
+      'button[title*="next" i]',
+      '.next-button button',
+      '#nextBtn',
+      '#btnNext'
+    ] : (isCoursera ? [
       'button[data-e2e="next-item"]',
       'a[data-e2e="next-item"]',
       'button[data-e2e="next-button"]',
@@ -310,7 +353,7 @@
       '.classroom-nav button[aria-label="Next video" i]',
       'button.classroom-nav__next-button',
       'button[aria-label*="Next" i]'
-    ];
+    ]);
 
     for (const sel of nextButtonSelectors) {
       const nextBtn = document.querySelector(sel);
@@ -341,6 +384,18 @@
         const nextAnchor = lessonLinks[currentIdx + 1];
         nextAnchor.scrollIntoView?.({ block: 'nearest' });
         nextAnchor.click();
+        timerId = setTimeout(startAutomationLoop, 2500);
+        return;
+      }
+    } else if (isLnt) {
+      const syllabus = document.querySelector('.course-curriculum, .course-syllabus, .curriculum, .syllabus, .sidebar') || document.body;
+      const allLinks = Array.from(syllabus.querySelectorAll('a[href*="lntedutech.com"], li[class*="item" i], div[class*="topic" i]'));
+      const currentHref = window.location.href;
+      const currentIdx = allLinks.findIndex(el => (el.href && el.href === currentHref) || el.classList.contains('active'));
+      if (currentIdx >= 0 && currentIdx + 1 < allLinks.length) {
+        const nextEl = allLinks[currentIdx + 1];
+        nextEl.scrollIntoView?.({ block: 'nearest' });
+        nextEl.click();
         timerId = setTimeout(startAutomationLoop, 2500);
         return;
       }

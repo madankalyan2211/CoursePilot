@@ -12,25 +12,27 @@ export class FloatingOverlay {
         const overlay = document.createElement('div');
         overlay.id = 'coursepilot-floating-overlay';
         overlay.innerHTML = `
-          <div id="lf-card" style="
+          <div id="cp-card" style="
             position: fixed;
             top: 24px;
             right: 24px;
             width: 320px;
-            background: rgba(22, 22, 28, 0.88);
-            backdrop-filter: blur(20px);
-            -webkit-backdrop-filter: blur(20px);
-            border: 1px solid rgba(255, 255, 255, 0.15);
+            background: rgba(20, 20, 26, 0.95);
+            backdrop-filter: blur(24px);
+            -webkit-backdrop-filter: blur(24px);
+            border: 1px solid rgba(255, 214, 10, 0.35);
             border-radius: 16px;
-            box-shadow: 0 16px 36px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 214, 10, 0.2);
+            box-shadow: 0 20px 48px rgba(0, 0, 0, 0.6), 0 0 24px rgba(255, 214, 10, 0.15);
             padding: 16px 18px;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI Variable Text', 'Segoe UI', system-ui, Roboto, 'Helvetica Neue', sans-serif;
             color: #f5f5f7;
             z-index: 2147483647;
             cursor: grab;
             user-select: none;
             transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.2s ease;
             box-sizing: border-box;
+            -webkit-font-smoothing: antialiased;
+            text-rendering: optimizeLegibility;
           ">
             <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
               <div style="display: flex; align-items: center; gap: 8px;">
@@ -42,7 +44,6 @@ export class FloatingOverlay {
               </a>
             </div>
 
-
             <div style="font-size: 14px; font-weight: 600; line-height: 1.35; margin-bottom: 6px; color: #ffffff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${title}">
               ${title}
             </div>
@@ -52,7 +53,7 @@ export class FloatingOverlay {
             </div>
 
             <div style="display: flex; gap: 8px;">
-              <button id="lf-resume-btn" style="
+              <button id="cp-resume-btn" style="
                 flex: 1;
                 background: #0a84ff;
                 color: #ffffff;
@@ -68,12 +69,13 @@ export class FloatingOverlay {
                 gap: 6px;
                 box-shadow: 0 4px 12px rgba(10, 132, 255, 0.35);
                 transition: all 0.15s ease;
+                font-family: inherit;
               ">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
                 Resume
               </button>
 
-              <button id="lf-stop-btn" style="
+              <button id="cp-stop-btn" style="
                 background: rgba(255, 69, 58, 0.18);
                 color: #ff453a;
                 border: 1px solid rgba(255, 69, 58, 0.35);
@@ -87,6 +89,7 @@ export class FloatingOverlay {
                 justify-content: center;
                 gap: 4px;
                 transition: all 0.15s ease;
+                font-family: inherit;
               ">
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
                 Stop
@@ -98,8 +101,8 @@ export class FloatingOverlay {
         document.body.appendChild(overlay);
 
         // Click handlers
-        const resumeBtn = document.getElementById('lf-resume-btn');
-        const stopBtn = document.getElementById('lf-stop-btn');
+        const resumeBtn = document.getElementById('cp-resume-btn');
+        const stopBtn = document.getElementById('cp-stop-btn');
 
         if (resumeBtn) {
           resumeBtn.addEventListener('click', (e) => {
@@ -116,7 +119,7 @@ export class FloatingOverlay {
         }
 
         // Make floating card draggable
-        const card = document.getElementById('lf-card');
+        const card = document.getElementById('cp-card');
         if (card) {
           let isDragging = false;
           let startX = 0;

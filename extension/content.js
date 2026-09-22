@@ -25,28 +25,46 @@
     if (request.action === 'START') {
       isRunning = true;
       isPausedForUser = false;
-      chrome.storage.local.set({ isRunning: true });
+      chrome.storage.local.set({ isRunning: true, isPausedForUser: false });
       logToPopup(`Starting CoursePilot (${isCoursera ? 'Coursera' : 'LinkedIn Learning'})...`);
+      syncStateToStorage();
       startAutomationLoop();
       sendResponse({ status: 'STARTED' });
     } else if (request.action === 'STOP') {
       isRunning = false;
       isPausedForUser = false;
-      chrome.storage.local.set({ isRunning: false });
+      chrome.storage.local.set({ isRunning: false, isPausedForUser: false });
+      syncStateToStorage();
       removeFloatingOverlay();
       if (timerId) clearTimeout(timerId);
       logToPopup('Automation stopped.');
       sendResponse({ status: 'STOPPED' });
     } else if (request.action === 'RESUME') {
       isPausedForUser = false;
+      chrome.storage.local.set({ isPausedForUser: false });
+      syncStateToStorage();
       removeFloatingOverlay();
       logToPopup('Resuming automation...');
       startAutomationLoop();
       sendResponse({ status: 'RESUMED' });
     } else if (request.action === 'GET_STATE') {
-      sendResponse(getPageDetails());
+      const details = getPageDetails();
+      syncStateToStorage();
+      sendResponse(details);
     }
   });
+
+  function syncStateToStorage() {
+    try {
+      const details = getPageDetails();
+      chrome.storage.local.set({
+        activeCourseState: details,
+        isRunning,
+        isPausedForUser
+      });
+    } catch {}
+  }
+
 
   function logToPopup(text, level = 'info') {
     const timestamp = new Date().toTimeString().split(' ')[0];
@@ -329,31 +347,33 @@
     const overlay = document.createElement('div');
     overlay.id = 'coursepilot-floating-overlay';
     overlay.innerHTML = `
-      <div id="lf-hud-card" style="
+      <div id="cp-hud-card" style="
         position: fixed;
         top: 24px;
         right: 24px;
         width: 320px;
-        background: rgba(22, 22, 28, 0.94);
-        backdrop-filter: blur(20px);
-        -webkit-backdrop-filter: blur(20px);
+        background: rgba(20, 20, 26, 0.95);
+        backdrop-filter: blur(24px);
+        -webkit-backdrop-filter: blur(24px);
         border: 1px solid rgba(255, 214, 10, 0.35);
         border-radius: 16px;
-        box-shadow: 0 20px 48px rgba(0, 0, 0, 0.55), 0 0 20px rgba(255, 214, 10, 0.15);
+        box-shadow: 0 20px 48px rgba(0, 0, 0, 0.6), 0 0 24px rgba(255, 214, 10, 0.15);
         padding: 16px;
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI Variable Text', 'Segoe UI', system-ui, Roboto, 'Helvetica Neue', sans-serif;
         color: #f5f5f7;
         z-index: 2147483647;
         cursor: grab;
         user-select: none;
         box-sizing: border-box;
+        -webkit-font-smoothing: antialiased;
+        text-rendering: optimizeLegibility;
       ">
         <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
           <div style="display: flex; align-items: center; gap: 6px;">
             <span style="width: 8px; height: 8px; border-radius: 50%; background: #ffd60a; box-shadow: 0 0 8px #ffd60a; display: inline-block;"></span>
             <span style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: #ffd60a; letter-spacing: 0.5px;">Assessment Detected</span>
           </div>
-          <a href="https://github.com/madankalyan2211/CoursePilot" target="_blank" style="font-size: 11px; color: #ffd60a; text-decoration: none; display: flex; align-items: center; gap: 4px; background: rgba(255, 214, 10, 0.15); padding: 2px 7px; border-radius: 99px; font-weight: 600;">
+          <a href="https://github.com/madankalyan2211/CoursePilot" target="_blank" style="font-size: 11px; color: #ffd60a; text-decoration: none; display: flex; align-items: center; gap: 4px; background: rgba(255, 214, 10, 0.15); padding: 2px 7px; border-radius: 99px; font-weight: 600; transition: background 0.2s;">
             ⭐ Star on GitHub
           </a>
         </div>
@@ -362,7 +382,7 @@
           Automation paused for interactive quiz / exam. Submit your answers and click <strong>Resume</strong>.
         </div>
         <div style="display: flex; gap: 8px;">
-          <button id="lf-hud-resume" style="
+          <button id="cp-hud-resume" style="
             flex: 1;
             background: #0a84ff;
             color: #fff;
@@ -373,8 +393,9 @@
             font-weight: 600;
             cursor: pointer;
             transition: opacity 0.2s;
+            font-family: inherit;
           ">Resume</button>
-          <button id="lf-hud-stop" style="
+          <button id="cp-hud-stop" style="
             background: rgba(255, 69, 58, 0.2);
             color: #ff453a;
             border: 1px solid rgba(255, 69, 58, 0.35);
@@ -383,6 +404,7 @@
             font-size: 13px;
             font-weight: 600;
             cursor: pointer;
+            font-family: inherit;
           ">Stop</button>
         </div>
       </div>
@@ -390,14 +412,14 @@
 
     document.body.appendChild(overlay);
 
-    document.getElementById('lf-hud-resume')?.addEventListener('click', () => {
+    document.getElementById('cp-hud-resume')?.addEventListener('click', () => {
       isPausedForUser = false;
       removeFloatingOverlay();
       logToPopup('Resumed from floating HUD');
       startAutomationLoop();
     });
 
-    document.getElementById('lf-hud-stop')?.addEventListener('click', () => {
+    document.getElementById('cp-hud-stop')?.addEventListener('click', () => {
       isRunning = false;
       isPausedForUser = false;
       chrome.storage.local.set({ isRunning: false });
@@ -406,12 +428,12 @@
     });
 
     // Make Draggable
-    const card = document.getElementById('lf-hud-card');
+    const card = document.getElementById('cp-hud-card');
     if (card) {
       let isDragging = false;
       let startX = 0, startY = 0, initialLeft = 0, initialTop = 0;
       card.addEventListener('mousedown', (e) => {
-        if (e.target.tagName === 'BUTTON') return;
+        if (e.target.tagName === 'BUTTON' || e.target.tagName === 'A') return;
         isDragging = true;
         const rect = card.getBoundingClientRect();
         initialLeft = rect.left;

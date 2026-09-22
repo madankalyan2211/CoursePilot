@@ -20,46 +20,72 @@
     if (isRunning) startAutomationLoop();
   });
 
+  function handleStart() {
+    chrome.storage.local.get(['hasStarred'], (res) => {
+      if (!res.hasStarred) {
+        logToPopup('Please star the GitHub repo to unlock CoursePilot.', 'warning');
+        return;
+      }
+      isRunning = true;
+      isPausedForUser = false;
+      chrome.storage.local.set({ isRunning: true, isPausedForUser: false });
+      logToPopup(`Starting CoursePilot (${isCoursera ? 'Coursera' : 'LinkedIn Learning'})...`);
+      syncStateToStorage();
+      startAutomationLoop();
+    });
+  }
+
+  function handleStop() {
+    isRunning = false;
+    isPausedForUser = false;
+    chrome.storage.local.set({ isRunning: false, isPausedForUser: false });
+    syncStateToStorage();
+    removeFloatingOverlay();
+    if (timerId) clearTimeout(timerId);
+    logToPopup('Automation stopped.');
+  }
+
+  function handleResume() {
+    isPausedForUser = false;
+    chrome.storage.local.set({ isPausedForUser: false });
+    syncStateToStorage();
+    removeFloatingOverlay();
+    logToPopup('Resuming automation...');
+    startAutomationLoop();
+  }
+
+  // Window global hooks for direct injection
+  window.__coursepilotStart = handleStart;
+  window.__coursepilotStop = handleStop;
+  window.__coursepilotResume = handleResume;
+
+  // Listen for storage changes as guaranteed communication channel
+  chrome.storage.onChanged?.addListener((changes, areaName) => {
+    if (areaName === 'local' && changes.actionTrigger) {
+      const action = changes.actionTrigger.newValue;
+      if (action === 'START') handleStart();
+      else if (action === 'STOP') handleStop();
+      else if (action === 'RESUME') handleResume();
+    }
+  });
+
   // Listen for popup messages
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'START') {
-      chrome.storage.local.get(['hasStarred'], (res) => {
-        if (!res.hasStarred) {
-          logToPopup('Please star the GitHub repo to unlock CoursePilot.', 'warning');
-          sendResponse({ status: 'STAR_REQUIRED' });
-          return;
-        }
-        isRunning = true;
-        isPausedForUser = false;
-        chrome.storage.local.set({ isRunning: true, isPausedForUser: false });
-        logToPopup(`Starting CoursePilot (${isCoursera ? 'Coursera' : 'LinkedIn Learning'})...`);
-        syncStateToStorage();
-        startAutomationLoop();
-        sendResponse({ status: 'STARTED' });
-      });
-      return true;
+      handleStart();
+      sendResponse({ status: 'STARTED' });
     } else if (request.action === 'STOP') {
-      isRunning = false;
-      isPausedForUser = false;
-      chrome.storage.local.set({ isRunning: false, isPausedForUser: false });
-      syncStateToStorage();
-      removeFloatingOverlay();
-      if (timerId) clearTimeout(timerId);
-      logToPopup('Automation stopped.');
+      handleStop();
       sendResponse({ status: 'STOPPED' });
     } else if (request.action === 'RESUME') {
-      isPausedForUser = false;
-      chrome.storage.local.set({ isPausedForUser: false });
-      syncStateToStorage();
-      removeFloatingOverlay();
-      logToPopup('Resuming automation...');
-      startAutomationLoop();
+      handleResume();
       sendResponse({ status: 'RESUMED' });
     } else if (request.action === 'GET_STATE') {
       const details = getPageDetails();
       syncStateToStorage();
       sendResponse(details);
     }
+    return true;
   });
 
   function syncStateToStorage() {

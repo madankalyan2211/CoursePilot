@@ -227,18 +227,35 @@ document.addEventListener('DOMContentLoaded', () => {
       targetTabId = chosenTabId;
       isTargetTabActive = activeIsCourse;
 
-      chrome.tabs.sendMessage(targetTabId, { action }, (res) => {
-        if (chrome.runtime.lastError) {
-          const errMsg = chrome.runtime.lastError.message || '';
-          if (errMsg.includes('Receiving end does not exist') || errMsg.includes('Could not establish connection')) {
-            autoInjectAndRetry(targetTabId, action, onSuccess);
-          } else {
-            addLog(`Could not connect to course tab: ${errMsg}`, 'error');
-          }
-        } else if (onSuccess) {
-          onSuccess(res);
-        }
+      // 1. Broadcast via storage (guaranteed to trigger storage.onChanged)
+      const newRunning = action === 'START' || action === 'RESUME';
+      chrome.storage.local.set({
+        isRunning: newRunning,
+        isPausedForUser: false,
+        actionTrigger: action,
+        actionTimestamp: Date.now()
       });
+
+      // 2. Direct scripting injection & message
+      if (chrome.scripting) {
+        chrome.scripting.executeScript({
+          target: { tabId: targetTabId },
+          files: ['content.js']
+        }, () => {
+          // Send direct message
+          chrome.tabs.sendMessage(targetTabId, { action }, (res) => {
+            if (chrome.runtime.lastError) {
+              // Storage.onChanged or script execution will handle it
+            }
+          });
+        });
+      } else {
+        chrome.tabs.sendMessage(targetTabId, { action }, () => {});
+      }
+
+      if (onSuccess) {
+        onSuccess({ status: action });
+      }
     });
   }
 

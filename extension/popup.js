@@ -214,21 +214,31 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   function executeTabAction(action, onSuccess) {
-    if (!targetTabId) {
-      addLog('No course tab open. Please open LinkedIn Learning or Coursera.', 'warning');
-      return;
-    }
-    chrome.tabs.sendMessage(targetTabId, { action }, (res) => {
-      if (chrome.runtime.lastError) {
-        const errMsg = chrome.runtime.lastError.message || '';
-        if (errMsg.includes('Receiving end does not exist') || errMsg.includes('Could not establish connection')) {
-          autoInjectAndRetry(targetTabId, action, onSuccess);
-        } else {
-          addLog(`Could not connect to course tab: ${errMsg}`, 'error');
-        }
-      } else if (onSuccess) {
-        onSuccess(res);
+    chrome.tabs.query({ active: true, currentWindow: true }, (currentTabs) => {
+      const activeTab = currentTabs[0];
+      const activeIsCourse = activeTab && isCourseUrl(activeTab.url);
+      const chosenTabId = activeIsCourse ? activeTab.id : targetTabId;
+
+      if (!chosenTabId) {
+        addLog('No course tab open. Please open LinkedIn Learning or Coursera.', 'warning');
+        return;
       }
+
+      targetTabId = chosenTabId;
+      isTargetTabActive = activeIsCourse;
+
+      chrome.tabs.sendMessage(targetTabId, { action }, (res) => {
+        if (chrome.runtime.lastError) {
+          const errMsg = chrome.runtime.lastError.message || '';
+          if (errMsg.includes('Receiving end does not exist') || errMsg.includes('Could not establish connection')) {
+            autoInjectAndRetry(targetTabId, action, onSuccess);
+          } else {
+            addLog(`Could not connect to course tab: ${errMsg}`, 'error');
+          }
+        } else if (onSuccess) {
+          onSuccess(res);
+        }
+      });
     });
   }
 

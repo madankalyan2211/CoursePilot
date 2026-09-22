@@ -9,7 +9,8 @@
   ],
   "host_permissions": [
     "*://*.linkedin.com/learning/*",
-    "*://*.coursera.org/*"
+    "*://*.coursera.org/*",
+    "https://api.github.com/*"
   ],
   "icons": {
     "16": "icons/icon16.png",

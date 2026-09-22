@@ -197,22 +197,121 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   const gateCloseBtn = document.getElementById('gate-close-btn');
+  const gateUsernameInput = document.getElementById('gate-username-input');
+  const gateStatusMsg = document.getElementById('gate-status-msg');
 
   gateCloseBtn?.addEventListener('click', () => {
     starGateModal.style.display = 'none';
   });
 
-  gateStarBtn?.addEventListener('click', () => {
-    gateConfirmBtn.style.background = '#30d158';
-    gateConfirmBtn.innerText = "2. I've Starred ⭐ (Activate Now)";
+  // Load saved username if any
+  chrome.storage.local.get(['githubUsername'], (res) => {
+    if (res.githubUsername && gateUsernameInput) {
+      gateUsernameInput.value = res.githubUsername;
+    }
   });
 
-  gateConfirmBtn?.addEventListener('click', () => {
-    hasStarred = true;
-    chrome.storage.local.set({ hasStarred: true });
-    starGateModal.style.display = 'none';
-    addLog('✨ Repository Starred — Automation Unlocked!', 'success');
-    startAutomation();
+  async function verifyGitHubStar() {
+    let rawUser = (gateUsernameInput?.value || '').trim();
+    // Normalize username (strip leading @, github.com URL, slashes)
+    rawUser = rawUser.replace(/^https?:\/\/github\.com\//i, '').replace(/^@/, '').replace(/\/.*$/, '').trim();
+
+    if (!rawUser) {
+      if (gateStatusMsg) {
+        gateStatusMsg.className = 'gate-status-msg error';
+        gateStatusMsg.style.display = 'block';
+        gateStatusMsg.innerText = '⚠️ Please enter your GitHub username first.';
+      }
+      gateUsernameInput?.focus();
+      return;
+    }
+
+    if (gateStatusMsg) {
+      gateStatusMsg.className = 'gate-status-msg loading';
+      gateStatusMsg.style.display = 'block';
+      gateStatusMsg.innerText = `🔍 Checking GitHub for @${rawUser}'s star...`;
+    }
+
+    if (gateConfirmBtn) {
+      gateConfirmBtn.setAttribute('disabled', 'true');
+      gateConfirmBtn.innerText = 'Verifying...';
+    }
+
+    try {
+      const response = await fetch(`https://api.github.com/users/${encodeURIComponent(rawUser)}/starred?per_page=100`, {
+        headers: {
+          'Accept': 'application/vnd.github.v3+json'
+        }
+      });
+
+      if (response.status === 404) {
+        if (gateStatusMsg) {
+          gateStatusMsg.className = 'gate-status-msg error';
+          gateStatusMsg.innerText = `❌ GitHub user "@${rawUser}" not found. Please check spelling.`;
+        }
+        return;
+      }
+
+      if (response.status === 403) {
+        // GitHub rate limit fallback
+        if (gateStatusMsg) {
+          gateStatusMsg.className = 'gate-status-msg error';
+          gateStatusMsg.innerText = '⚠️ GitHub API rate limit reached. Please wait a moment or ensure you have starred the repo.';
+        }
+        return;
+      }
+
+      if (!response.ok) {
+        throw new Error(`GitHub API returned status ${response.status}`);
+      }
+
+      const starredRepos = await response.json();
+      const hasStarredTarget = Array.isArray(starredRepos) && starredRepos.some((repo) => {
+        const full = (repo.full_name || '').toLowerCase();
+        const name = (repo.name || '').toLowerCase();
+        const owner = (repo.owner?.login || '').toLowerCase();
+        return full === 'madankalyan2211/coursepilot' || (name === 'coursepilot' && owner === 'madankalyan2211');
+      });
+
+      if (hasStarredTarget) {
+        hasStarred = true;
+        chrome.storage.local.set({ hasStarred: true, githubUsername: rawUser });
+
+        if (gateStatusMsg) {
+          gateStatusMsg.className = 'gate-status-msg success';
+          gateStatusMsg.innerText = `✓ Verified! Thank you @${rawUser}! ⭐`;
+        }
+
+        setTimeout(() => {
+          starGateModal.style.display = 'none';
+          addLog(`✨ Verified Star from @${rawUser} — Automation Unlocked!`, 'success');
+          startAutomation();
+        }, 800);
+      } else {
+        if (gateStatusMsg) {
+          gateStatusMsg.className = 'gate-status-msg error';
+          gateStatusMsg.innerText = `❌ Star not found on @${rawUser}'s profile. Click "1. Star Repository on GitHub" and try again!`;
+        }
+      }
+    } catch (err) {
+      if (gateStatusMsg) {
+        gateStatusMsg.className = 'gate-status-msg error';
+        gateStatusMsg.innerText = `⚠️ Network error checking GitHub. Please check connection.`;
+      }
+    } finally {
+      if (gateConfirmBtn) {
+        gateConfirmBtn.removeAttribute('disabled');
+        gateConfirmBtn.innerText = 'Verify Star & Activate 🚀';
+      }
+    }
+  }
+
+  gateConfirmBtn?.addEventListener('click', verifyGitHubStar);
+  gateUsernameInput?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      verifyGitHubStar();
+    }
   });
 
   stopBtn.addEventListener('click', () => {

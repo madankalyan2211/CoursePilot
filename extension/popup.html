@@ -76,7 +76,7 @@
       </a>
     </div>
 
-    <!-- Star Gate Required Modal -->
+    <!-- Star Gate Required Modal (Live Star Verification) -->
     <div class="star-gate-overlay" id="star-gate-modal" style="display: none;">
       <div class="star-gate-card">
         <button class="star-gate-close" id="gate-close-btn" title="Close">✕</button>
@@ -85,14 +85,24 @@
         <div class="star-gate-desc">
           CoursePilot is free & open-source. To enable auto-advance and video automation, please <strong>Star our GitHub repository</strong>.
         </div>
+        
         <div class="star-gate-actions">
           <a href="https://github.com/madankalyan2211/CoursePilot" target="_blank" class="btn btn-star-action" id="gate-star-btn">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="#ffd60a" stroke="#ffd60a" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
             <span>1. Star Repository on GitHub</span>
           </a>
-          <button class="btn btn-activate-action" id="gate-confirm-btn">
-            <span>2. I've Starred ⭐ (Activate)</span>
-          </button>
+
+          <div class="gate-verify-box">
+            <div class="input-label">2. Enter your GitHub username to verify:</div>
+            <div class="gate-input-row">
+              <span class="gate-input-prefix">@</span>
+              <input type="text" id="gate-username-input" class="gate-username-input" placeholder="github-username" autocomplete="off" spellcheck="false" />
+            </div>
+            <button class="btn btn-activate-action" id="gate-confirm-btn">
+              <span>Verify Star & Activate 🚀</span>
+            </button>
+            <div class="gate-status-msg" id="gate-status-msg" style="display: none;"></div>
+          </div>
         </div>
       </div>
     </div>

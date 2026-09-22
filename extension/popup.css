@@ -469,10 +469,102 @@ body {
   padding: 10px;
   border-radius: 9px;
   box-shadow: 0 4px 12px rgba(10, 132, 255, 0.35);
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  width: 100%;
+  font-family: inherit;
 }
 
 .btn-activate-action:hover {
   background: #409cff;
+}
+
+.btn-activate-action:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.gate-verify-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  padding: 10px;
+  box-sizing: border-box;
+}
+
+.input-label {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.8);
+  text-align: left;
+  font-weight: 600;
+}
+
+.gate-input-row {
+  display: flex;
+  align-items: center;
+  background: rgba(20, 20, 26, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 8px;
+  padding: 0 8px;
+  transition: border-color 0.2s;
+}
+
+.gate-input-row:focus-within {
+  border-color: #ffd60a;
+  box-shadow: 0 0 0 2px rgba(255, 214, 10, 0.2);
+}
+
+.gate-input-prefix {
+  color: #ffd60a;
+  font-weight: 700;
+  font-size: 12px;
+}
+
+.gate-username-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: #ffffff;
+  font-size: 12px;
+  font-family: inherit;
+  padding: 8px 6px;
+}
+
+.gate-username-input::placeholder {
+  color: rgba(255, 255, 255, 0.35);
+}
+
+.gate-status-msg {
+  font-size: 11px;
+  line-height: 1.35;
+  text-align: left;
+  padding: 6px 8px;
+  border-radius: 6px;
+  word-break: break-word;
+}
+
+.gate-status-msg.loading {
+  background: rgba(10, 132, 255, 0.15);
+  border: 1px solid rgba(10, 132, 255, 0.3);
+  color: #0a84ff;
+}
+
+.gate-status-msg.error {
+  background: rgba(255, 69, 58, 0.15);
+  border: 1px solid rgba(255, 69, 58, 0.3);
+  color: #ff453a;
+}
+
+.gate-status-msg.success {
+  background: rgba(48, 209, 88, 0.15);
+  border: 1px solid rgba(48, 209, 88, 0.3);
+  color: #30d158;
 }
 
 

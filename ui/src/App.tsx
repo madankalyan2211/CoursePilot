@@ -6,6 +6,7 @@ import { ActivityLog } from './components/ActivityLog.js';
 import { AssessmentModal } from './components/AssessmentModal.js';
 import { FloatingNotification } from './components/FloatingNotification.js';
 import { DebugDrawer } from './components/DebugDrawer.js';
+import { StarGateModal } from './components/StarGateModal.js';
 import { EngineSnapshot, AutomationState, AutomationSettings } from '../../src/automation/automationState.js';
 
 const INITIAL_SNAPSHOT: EngineSnapshot = {
@@ -33,6 +34,10 @@ export const App: React.FC = () => {
   const [snapshot, setSnapshot] = useState<EngineSnapshot>(INITIAL_SNAPSHOT);
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
   const [showDebug, setShowDebug] = useState(false);
+  const [showStarGate, setShowStarGate] = useState(false);
+  const [hasStarred, setHasStarred] = useState<boolean>(() => {
+    return localStorage.getItem('coursepilot_has_starred') === 'true';
+  });
   const wsRef = useRef<WebSocket | null>(null);
 
   // Theme switcher
@@ -94,7 +99,21 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleStart = () => sendWsAction('START');
+  const handleStart = () => {
+    if (!hasStarred) {
+      setShowStarGate(true);
+      return;
+    }
+    sendWsAction('START');
+  };
+
+  const handleActivateFromGate = () => {
+    setHasStarred(true);
+    localStorage.setItem('coursepilot_has_starred', 'true');
+    setShowStarGate(false);
+    sendWsAction('START');
+  };
+
   const handleStop = () => sendWsAction('STOP');
   const handleResume = () => sendWsAction('RESUME');
   const handleOpenLinkedIn = () => sendWsAction('OPEN_LINKEDIN');
@@ -158,6 +177,13 @@ export const App: React.FC = () => {
         onResume={handleResume}
         onStop={handleStop}
       />
+
+      <StarGateModal
+        isOpen={showStarGate}
+        onActivate={handleActivateFromGate}
+        onClose={() => setShowStarGate(false)}
+      />
     </div>
   );
 };
+

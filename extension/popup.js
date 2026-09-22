@@ -1,5 +1,5 @@
 /**
- * LearnFlow Chrome Extension — Popup Controller
+ * CoursePilot Chrome Extension — Popup Controller
  */
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -11,6 +11,18 @@ document.addEventListener('DOMContentLoaded', () => {
   const courseName = document.getElementById('course-name');
   const lessonName = document.getElementById('lesson-name');
   const logBox = document.getElementById('log-box');
+  
+  // Star Gate Elements
+  const starGateModal = document.getElementById('star-gate-modal');
+  const gateStarBtn = document.getElementById('gate-star-btn');
+  const gateConfirmBtn = document.getElementById('gate-confirm-btn');
+
+  let hasStarred = false;
+
+  // Check stored star status
+  chrome.storage.local.get(['hasStarred'], (res) => {
+    hasStarred = Boolean(res.hasStarred);
+  });
 
   function updateUi(state) {
     if (!state) return;
@@ -63,7 +75,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  startBtn.addEventListener('click', () => {
+  function startAutomation() {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       if (tabs[0]?.id) {
         chrome.tabs.sendMessage(tabs[0].id, { action: 'START' }, () => {
@@ -71,6 +83,31 @@ document.addEventListener('DOMContentLoaded', () => {
         });
       }
     });
+  }
+
+  startBtn.addEventListener('click', () => {
+    chrome.storage.local.get(['hasStarred'], (res) => {
+      hasStarred = Boolean(res.hasStarred);
+      if (!hasStarred) {
+        // Show Star Gate Modal
+        starGateModal.style.display = 'flex';
+      } else {
+        startAutomation();
+      }
+    });
+  });
+
+  gateStarBtn?.addEventListener('click', () => {
+    gateConfirmBtn.style.background = '#30d158';
+    gateConfirmBtn.innerText = "2. I've Starred ⭐ (Activate Now)";
+  });
+
+  gateConfirmBtn?.addEventListener('click', () => {
+    hasStarred = true;
+    chrome.storage.local.set({ hasStarred: true });
+    starGateModal.style.display = 'none';
+    addLog('✨ Repository Starred — Automation Unlocked!', 'success');
+    startAutomation();
   });
 
   stopBtn.addEventListener('click', () => {
@@ -93,3 +130,4 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 });
+

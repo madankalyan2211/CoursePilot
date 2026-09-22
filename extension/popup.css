@@ -285,3 +285,109 @@ body {
   color: #ffd60a;
 }
 
+/* Star Gate Modal Overlay */
+.star-gate-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(10, 10, 14, 0.88);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  z-index: 1000;
+  box-sizing: border-box;
+}
+
+.star-gate-card {
+  background: rgba(26, 26, 34, 0.98);
+  border: 1px solid rgba(255, 214, 10, 0.4);
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.6), 0 0 20px rgba(255, 214, 10, 0.15);
+  border-radius: 16px;
+  padding: 18px 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 10px;
+  width: 100%;
+}
+
+.star-icon-bubble {
+  font-size: 26px;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: rgba(255, 214, 10, 0.15);
+  border: 1px solid rgba(255, 214, 10, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 0 16px rgba(255, 214, 10, 0.25);
+}
+
+.star-gate-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.star-gate-desc {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.75);
+  line-height: 1.4;
+}
+
+.star-gate-desc strong {
+  color: #ffd60a;
+}
+
+.star-gate-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  margin-top: 4px;
+}
+
+.btn-star-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: rgba(255, 214, 10, 0.15);
+  border: 1px solid rgba(255, 214, 10, 0.4);
+  color: #ffd60a;
+  text-decoration: none;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 10px;
+  border-radius: 9px;
+  transition: all 0.2s ease;
+}
+
+.btn-star-action:hover {
+  background: rgba(255, 214, 10, 0.25);
+  border-color: #ffd60a;
+  transform: translateY(-1px);
+}
+
+.btn-activate-action {
+  background: #0a84ff;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 10px;
+  border-radius: 9px;
+  box-shadow: 0 4px 12px rgba(10, 132, 255, 0.35);
+}
+
+.btn-activate-action:hover {
+  background: #409cff;
+}
+
+

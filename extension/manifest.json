@@ -6,13 +6,16 @@
   "permissions": [
     "storage",
     "activeTab",
-    "scripting"
+    "scripting",
+    "tabs",
+    "notifications"
   ],
   "host_permissions": [
     "*://*.linkedin.com/*",
     "*://*.coursera.org/*",
     "*://*.lntedutech.com/*",
-    "https://api.github.com/*"
+    "https://api.github.com/*",
+    "<all_urls>"
   ],
   "icons": {
     "16": "icons/icon16.png",

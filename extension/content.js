@@ -316,7 +316,9 @@
       if (isAssessmentPage()) {
         logToPopup('Quiz / Assessment Detected — Pausing Automation', 'warning');
         isPausedForUser = true;
-        chrome.storage.local.set({ isPausedForUser: true });
+        const details = getPageDetails();
+        chrome.storage.local.set({ isPausedForUser: true, activeCourseState: details });
+        chrome.runtime.sendMessage({ type: 'QUIZ_DETECTED', data: details }).catch(() => {});
         showFloatingOverlay();
         syncStateToStorage();
         return;

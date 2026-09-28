@@ -410,18 +410,24 @@
         syncStateToStorage();
       }
 
-      // 5. Seek video towards end (if not yet seeked for this video)
-      // We seek to 1.2s before the end so natural playback reaches the absolute end and triggers LinkedIn telemetry
-      const effectiveSeekOffset = Math.min(seekOffset || 1.5, 1.5);
-      const targetTime = Math.max(0, duration - effectiveSeekOffset);
-
-      if (!hasSeekedCurrentVideo && video.currentTime < targetTime - 0.4) {
-        // Ensure readyState is sufficient before seeking
+      // 5. Milestone Progress Sweeping & Natural End Fast-Forward
+      if (!hasSeekedCurrentVideo) {
         if (video.readyState >= 1) {
+          // Sweep milestones (25%, 50%, 75%, 90%) to satisfy milestone-based analytics
+          if (duration > 6) {
+            const milestones = [0.25, 0.5, 0.75, 0.9];
+            for (const m of milestones) {
+              const mTime = duration * m;
+              video.currentTime = mTime;
+              video.dispatchEvent(new Event('timeupdate'));
+            }
+          }
+
+          // Seek to 0.7s before the end so natural playback reaches the absolute end
+          const targetTime = Math.max(0, duration - 0.7);
           video.currentTime = targetTime;
-          // Play at 2.5x to quickly hit the natural end
           try {
-            video.playbackRate = 2.5;
+            video.playbackRate = 2.0;
           } catch {}
           video.dispatchEvent(new Event('seeking'));
           video.dispatchEvent(new Event('seeked'));
@@ -431,27 +437,19 @@
           }
           hasSeekedCurrentVideo = true;
           const details = getPageDetails();
-          logToPopup(`▶ ${details.lessonTitle}: Fast-forwarding to end (${targetTime.toFixed(1)}s / ${duration.toFixed(1)}s)`, 'info');
+          logToPopup(`▶ ${details.lessonTitle}: Fast-forwarding to end (${targetTime.toFixed(1)}s / ${duration.toFixed(1)}s)...`, 'info');
         }
         return;
       }
 
-      // 6. Ensure video reaches the absolute end and triggers native ended event
+      // 6. Ensure video reaches the natural end and plays through the last frame
       if (hasSeekedCurrentVideo) {
-        if (video.paused && !video.ended && video.currentTime < duration - 0.1) {
+        if (video.paused && !video.ended) {
           video.play().catch(() => {});
-        }
-
-        // If very close to end, ensure ended event fires
-        if (video.currentTime >= duration - 0.2 && !video.ended) {
-          video.currentTime = duration;
-          video.dispatchEvent(new Event('timeupdate'));
-          video.dispatchEvent(new Event('ended'));
-          video.dispatchEvent(new Event('pause'));
         }
       }
 
-      // 7. Verify Green Checkmark in TOC & Confirm Completion
+      // 7. Strict Green Checkmark Verification in TOC
       const isNaturalEnd = video.ended || video.currentTime >= duration - 0.05;
       const isTocCompleted = isMarkedCompletedInToc();
 
@@ -460,15 +458,15 @@
           videoCompletedTimestamp = Date.now();
         }
 
-        const elapsedSinceCompletion = Date.now() - videoCompletedTimestamp;
+        const elapsedSinceEnd = Date.now() - videoCompletedTimestamp;
 
-        // Wait until TOC shows green checkmark OR max 2.5s for background beacon to flush
-        if (isTocCompleted || elapsedSinceCompletion >= 2500) {
+        // If green checkmark is present, or after generous timeout (6s)
+        if (isTocCompleted || elapsedSinceEnd >= 6000) {
           if (lastCompletedVideoKey !== currentKey) {
             lastCompletedVideoKey = currentKey;
             const details = getPageDetails();
-            const statusLabel = isTocCompleted ? '✓ Green Check Confirmed' : '✓ Completed';
-            logToPopup(`✓ Completed: ${details.lessonTitle} (${statusLabel})`, 'success');
+            const statusLabel = isTocCompleted ? '✓ Green Tick Confirmed' : '✓ Completed';
+            logToPopup(`✓ ${details.lessonTitle}: ${statusLabel}`, 'success');
           }
 
           const now = Date.now();
@@ -476,6 +474,11 @@
             lastAdvanceTime = now;
             videoCompletedTimestamp = 0;
             advanceToNextTopic();
+          }
+        } else {
+          // Keep gently nudging playback if waiting for green tick
+          if (video.paused && !video.ended) {
+            video.play().catch(() => {});
           }
         }
       }

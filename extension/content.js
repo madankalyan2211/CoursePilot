@@ -265,6 +265,59 @@
     return false;
   }
 
+  function isMarkedCompletedInToc() {
+    const activeTocSelectors = [
+      '[data-test-toc-item-active]',
+      '.classroom-toc-item--active',
+      '.classroom-sidebar__item--active',
+      'li.classroom-nav__item--active',
+      'li[aria-current="true"]',
+      'li.classroom-toc-item.active',
+      'li.active',
+      'a[aria-current="page"]',
+      'a.active'
+    ];
+
+    for (const sel of activeTocSelectors) {
+      const item = document.querySelector(sel);
+      if (item) {
+        // If it contains a check icon, it's completed (green checkmark!)
+        const checkIcon = item.querySelector('svg[data-test-icon*="check" i], svg[data-test-icon="check-small"], svg[data-test-icon="check-medium"], .completed-icon, svg[data-e2e*="complete"], .rc-CompletedIcon, i.fa-check-circle, .completed');
+        if (checkIcon) return true;
+
+        // Class-based checks
+        if (
+          item.classList.contains('completed') ||
+          item.classList.contains('classroom-toc-item--completed') ||
+          item.getAttribute('data-test-toc-item-completed') !== null
+        ) {
+          return true;
+        }
+      }
+    }
+
+    // Also check if current URL lesson item in sidebar is marked completed
+    try {
+      const currentPath = window.location.pathname.replace(/\/$/, '');
+      const allTocLinks = document.querySelectorAll('a[href*="/learning/"], a[href*="/learn/"]');
+      for (const a of allTocLinks) {
+        const p = (a.pathname || '').replace(/\/$/, '');
+        if (p && p === currentPath) {
+          const parent = a.closest('li') || a.parentElement || a;
+          if (
+            parent.querySelector('svg[data-test-icon*="check" i], svg[data-e2e*="complete"], .completed-icon') ||
+            parent.classList.contains('classroom-toc-item--completed') ||
+            parent.classList.contains('completed')
+          ) {
+            return true;
+          }
+        }
+      }
+    } catch {}
+
+    return false;
+  }
+
   function findActiveVideoElement() {
     const videoSelectors = [
       'video.c-video',
@@ -296,7 +349,7 @@
 
   function startAutomationEngine() {
     if (loopIntervalId) clearInterval(loopIntervalId);
-    loopIntervalId = setInterval(automationTick, 500);
+    loopIntervalId = setInterval(automationTick, 400);
   }
 
   function stopAutomationEngine() {
@@ -306,6 +359,8 @@
     }
     isProcessingTick = false;
   }
+
+  let videoCompletedTimestamp = 0;
 
   async function automationTick() {
     if (!isRunning || isPausedForUser || isProcessingTick) return;
@@ -350,17 +405,24 @@
       if (currentKey !== activeVideoKey) {
         activeVideoKey = currentKey;
         hasSeekedCurrentVideo = false;
+        videoCompletedTimestamp = 0;
         advanceAttemptCount = 0;
         syncStateToStorage();
       }
 
       // 5. Seek video towards end (if not yet seeked for this video)
-      const targetTime = Math.max(0, duration - seekOffset);
+      // We seek to 1.2s before the end so natural playback reaches the absolute end and triggers LinkedIn telemetry
+      const effectiveSeekOffset = Math.min(seekOffset || 1.5, 1.5);
+      const targetTime = Math.max(0, duration - effectiveSeekOffset);
 
-      if (!hasSeekedCurrentVideo && video.currentTime < targetTime - 1) {
+      if (!hasSeekedCurrentVideo && video.currentTime < targetTime - 0.4) {
         // Ensure readyState is sufficient before seeking
         if (video.readyState >= 1) {
           video.currentTime = targetTime;
+          // Play at 2.5x to quickly hit the natural end
+          try {
+            video.playbackRate = 2.5;
+          } catch {}
           video.dispatchEvent(new Event('seeking'));
           video.dispatchEvent(new Event('seeked'));
           video.dispatchEvent(new Event('timeupdate'));
@@ -369,27 +431,52 @@
           }
           hasSeekedCurrentVideo = true;
           const details = getPageDetails();
-          logToPopup(`▶ ${details.lessonTitle}: Seeked to ${targetTime.toFixed(1)}s / ${duration.toFixed(1)}s`, 'info');
+          logToPopup(`▶ ${details.lessonTitle}: Fast-forwarding to end (${targetTime.toFixed(1)}s / ${duration.toFixed(1)}s)`, 'info');
         }
         return;
       }
 
-      // 6. Check Completion
-      const isNearEnd = video.currentTime >= Math.max(0, duration - 0.9);
-      const isEnded = video.ended;
-
-      if (isEnded || (hasSeekedCurrentVideo && isNearEnd)) {
-        if (lastCompletedVideoKey !== currentKey) {
-          lastCompletedVideoKey = currentKey;
-          const details = getPageDetails();
-          logToPopup(`✓ Completed: ${details.lessonTitle}`, 'success');
+      // 6. Ensure video reaches the absolute end and triggers native ended event
+      if (hasSeekedCurrentVideo) {
+        if (video.paused && !video.ended && video.currentTime < duration - 0.1) {
+          video.play().catch(() => {});
         }
 
-        // Advance to next video
-        const now = Date.now();
-        if (now - lastAdvanceTime >= 1200) {
-          lastAdvanceTime = now;
-          advanceToNextTopic();
+        // If very close to end, ensure ended event fires
+        if (video.currentTime >= duration - 0.2 && !video.ended) {
+          video.currentTime = duration;
+          video.dispatchEvent(new Event('timeupdate'));
+          video.dispatchEvent(new Event('ended'));
+          video.dispatchEvent(new Event('pause'));
+        }
+      }
+
+      // 7. Verify Green Checkmark in TOC & Confirm Completion
+      const isNaturalEnd = video.ended || video.currentTime >= duration - 0.05;
+      const isTocCompleted = isMarkedCompletedInToc();
+
+      if (hasSeekedCurrentVideo && (isNaturalEnd || isTocCompleted)) {
+        if (!videoCompletedTimestamp) {
+          videoCompletedTimestamp = Date.now();
+        }
+
+        const elapsedSinceCompletion = Date.now() - videoCompletedTimestamp;
+
+        // Wait until TOC shows green checkmark OR max 2.5s for background beacon to flush
+        if (isTocCompleted || elapsedSinceCompletion >= 2500) {
+          if (lastCompletedVideoKey !== currentKey) {
+            lastCompletedVideoKey = currentKey;
+            const details = getPageDetails();
+            const statusLabel = isTocCompleted ? '✓ Green Check Confirmed' : '✓ Completed';
+            logToPopup(`✓ Completed: ${details.lessonTitle} (${statusLabel})`, 'success');
+          }
+
+          const now = Date.now();
+          if (now - lastAdvanceTime >= 1200) {
+            lastAdvanceTime = now;
+            videoCompletedTimestamp = 0;
+            advanceToNextTopic();
+          }
         }
       }
     } catch (err) {

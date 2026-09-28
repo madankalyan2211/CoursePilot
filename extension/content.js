@@ -1,15 +1,23 @@
 /**
  * CoursePilot Chrome Extension — Content Script
- * Multi-Platform: LinkedIn Learning & Coursera
- * Automates repetitive video playback and auto-advances lessons with interactive quiz safety pauses.
+ * Multi-Platform: LinkedIn Learning, Coursera & L&T EduTech
+ * Automates video playback and auto-advances lessons with interactive quiz safety pauses.
  */
 
 (function () {
   let isRunning = false;
   let isPausedForUser = false;
-  let timerId = null;
-  let lastCompletedUrl = null;
   let seekOffset = 2.5;
+
+  // Track the current video/lesson state to prevent re-seeking the same video while playing
+  let activeVideoKey = null;
+  let hasSeekedCurrentVideo = false;
+  let lastCompletedVideoKey = null;
+  let advanceAttemptCount = 0;
+  let lastAdvanceTime = 0;
+
+  let loopIntervalId = null;
+  let isProcessingTick = false;
 
   const isCoursera = window.location.hostname.includes('coursera.org');
   const isLnt = window.location.hostname.includes('lntedutech.com');
@@ -18,8 +26,10 @@
   // Load initial settings
   chrome.storage.local.get(['isRunning', 'seekOffset', 'hasStarred'], (res) => {
     isRunning = Boolean(res.isRunning) && Boolean(res.hasStarred);
-    seekOffset = res.seekOffset || 2.5;
-    if (isRunning) startAutomationLoop();
+    seekOffset = Number(res.seekOffset) || 2.5;
+    if (isRunning) {
+      startAutomationEngine();
+    }
   });
 
   function handleStart() {
@@ -30,30 +40,37 @@
       }
       isRunning = true;
       isPausedForUser = false;
+      activeVideoKey = null;
+      hasSeekedCurrentVideo = false;
+      advanceAttemptCount = 0;
       chrome.storage.local.set({ isRunning: true, isPausedForUser: false });
-      logToPopup(`Starting CoursePilot (${platformName})...`);
+      logToPopup(`Starting CoursePilot (${platformName})...`, 'info');
       syncStateToStorage();
-      startAutomationLoop();
+      startAutomationEngine();
     });
   }
 
   function handleStop() {
     isRunning = false;
     isPausedForUser = false;
+    activeVideoKey = null;
+    hasSeekedCurrentVideo = false;
     chrome.storage.local.set({ isRunning: false, isPausedForUser: false });
     syncStateToStorage();
     removeFloatingOverlay();
-    if (timerId) clearTimeout(timerId);
-    logToPopup('Automation stopped.');
+    stopAutomationEngine();
+    logToPopup('Automation stopped.', 'warning');
   }
 
   function handleResume() {
     isPausedForUser = false;
+    activeVideoKey = null;
+    hasSeekedCurrentVideo = false;
     chrome.storage.local.set({ isPausedForUser: false });
     syncStateToStorage();
     removeFloatingOverlay();
-    logToPopup('Resuming automation...');
-    startAutomationLoop();
+    logToPopup('Resuming automation...', 'info');
+    startAutomationEngine();
   }
 
   // Window global hooks for direct injection
@@ -101,7 +118,6 @@
     } catch {}
   }
 
-
   function logToPopup(text, level = 'info') {
     const timestamp = new Date().toTimeString().split(' ')[0];
     chrome.runtime.sendMessage({
@@ -121,7 +137,7 @@
 
   function getPageDetails() {
     const currentUrl = window.location.href;
-    
+
     // Multi-platform title extraction
     let courseTitle = '';
     const courseSelectors = isLnt ? [
@@ -198,15 +214,24 @@
     };
   }
 
+  /**
+   * Precise Assessment / Quiz Detection
+   * Avoids false positives from sidebar elements or discussion icons
+   */
   function isAssessmentPage() {
+    // If an active video is present and ready, it is a video page
+    const video = findActiveVideoElement();
+    if (video && typeof video.duration === 'number' && video.duration > 0) {
+      return false;
+    }
+
     const url = window.location.pathname.toLowerCase();
-    // URL-based check
+    // Specific quiz/exam URL routes
     if (
       url.includes('/quiz') || 
       url.includes('/assessment') || 
       url.includes('/exam') || 
       url.includes('/test/') ||
-      url.includes('/test-') ||
       url.includes('/assignment-submission') ||
       url.includes('/peer-review') ||
       url.includes('/ungradedwidget')
@@ -214,36 +239,25 @@
       return true;
     }
 
-    // Check if an active video is present and ready
-    const video = document.querySelector('video.c-video, video.vjs-tech, video');
-    if (video && typeof video.duration === 'number' && video.duration > 0) {
-      return false;
-    }
-
-    // DOM Assessment Indicators
-    const assessmentSelectors = [
+    // Specific visible quiz DOM elements (scoped strictly to classroom main container)
+    const specificQuizSelectors = [
       'form[data-test-quiz-form]',
       'fieldset.quiz-question',
-      '[data-test-quiz-container]',
+      '[data-test-quiz-container]:not(.hidden)',
       '.classroom-quiz:not(.hidden)',
-      '.rc-Quiz',
-      '.rc-Assignment',
-      '.rc-Exam',
-      '.rc-PeerReview',
-      'form[data-e2e*="quiz"]',
-      'form.rc-QuizForm',
-      'div[data-e2e="ungraded-widget"]',
-      'div[data-e2e="quiz-prompt"]',
-      'div[class*="quiz" i]',
-      'div[class*="assessment" i]',
-      'div[class*="question" i]',
-      '.assessment-container',
-      '.test-container'
+      '.rc-Quiz:not(.hidden)',
+      '.rc-QuizForm',
+      '.rc-Assignment:not(.hidden)',
+      '.rc-Exam:not(.hidden)',
+      '.rc-PeerReview:not(.hidden)',
+      'div[data-e2e="assessment-view"]',
+      'div[data-test-assessment-view]',
+      'div[data-test-practice-challenge] form'
     ];
 
-    for (const sel of assessmentSelectors) {
+    for (const sel of specificQuizSelectors) {
       const el = document.querySelector(sel);
-      if (el && el.offsetParent !== null) { // visible
+      if (el && el.offsetParent !== null) {
         return true;
       }
     }
@@ -251,79 +265,144 @@
     return false;
   }
 
-  async function startAutomationLoop() {
-    if (!isRunning || isPausedForUser) return;
+  function findActiveVideoElement() {
+    const videoSelectors = [
+      'video.c-video',
+      'video.vjs-tech',
+      '.video-js video',
+      'div[data-playback-type="video"] video',
+      'div[data-e2e="video-player"] video',
+      'video[src]',
+      'video'
+    ];
+
+    for (const sel of videoSelectors) {
+      const videos = document.querySelectorAll(sel);
+      for (const v of videos) {
+        if (v && (v.offsetWidth > 0 || v.offsetHeight > 0 || !isNaN(v.duration))) {
+          return v;
+        }
+      }
+    }
+    return null;
+  }
+
+  function getVideoIdentifier(video) {
+    const details = getPageDetails();
+    const url = normalizeUrl(window.location.href);
+    const src = video?.currentSrc || video?.src || '';
+    return `${url}::${details.lessonTitle}::${src}`;
+  }
+
+  function startAutomationEngine() {
+    if (loopIntervalId) clearInterval(loopIntervalId);
+    loopIntervalId = setInterval(automationTick, 500);
+  }
+
+  function stopAutomationEngine() {
+    if (loopIntervalId) {
+      clearInterval(loopIntervalId);
+      loopIntervalId = null;
+    }
+    isProcessingTick = false;
+  }
+
+  async function automationTick() {
+    if (!isRunning || isPausedForUser || isProcessingTick) return;
+    isProcessingTick = true;
 
     try {
-      const currentNormalized = normalizeUrl(window.location.href);
-
-      // Guard: Check if we are still on the completed lesson
-      if (lastCompletedUrl && currentNormalized === lastCompletedUrl) {
-        logToPopup('Already completed this video. Advancing to next topic...', 'info');
-        advanceToNextTopic();
-        return;
-      }
-
-      // Check for Quiz / Assessment
+      // 1. Check for Quiz / Assessment
       if (isAssessmentPage()) {
         logToPopup('Quiz / Assessment Detected — Pausing Automation', 'warning');
         isPausedForUser = true;
+        chrome.storage.local.set({ isPausedForUser: true });
         showFloatingOverlay();
+        syncStateToStorage();
         return;
       }
 
-      // Find Video Player
-      const video = document.querySelector('video.c-video, video.vjs-tech, video');
+      // 2. Locate Active Video Player
+      const video = findActiveVideoElement();
       if (!video) {
-        timerId = setTimeout(startAutomationLoop, 1500);
+        // If we recently tried to advance, let the page settle
+        if (Date.now() - lastAdvanceTime < 3000) {
+          return;
+        }
+        // Try fallback advancement if we appear stuck after completion
+        if (lastCompletedVideoKey && Date.now() - lastAdvanceTime > 6000) {
+          advanceToNextTopic();
+        }
         return;
       }
 
-      // Wait for video metadata
-      if (isNaN(video.duration) || video.duration <= 0) {
-        timerId = setTimeout(startAutomationLoop, 800);
-        return;
-      }
-
+      // 3. Check if video element is ready with valid duration
       const duration = video.duration;
+      if (isNaN(duration) || duration <= 0) {
+        return;
+      }
+
+      const currentKey = getVideoIdentifier(video);
+
+      // 4. If this is a new video, reset per-video flags
+      if (currentKey !== activeVideoKey) {
+        activeVideoKey = currentKey;
+        hasSeekedCurrentVideo = false;
+        advanceAttemptCount = 0;
+        syncStateToStorage();
+      }
+
+      // 5. Seek video towards end (if not yet seeked for this video)
       const targetTime = Math.max(0, duration - seekOffset);
 
-      // Seek toward video end if not already near end
-      if (video.currentTime < targetTime - 1) {
-        video.currentTime = targetTime;
-        video.dispatchEvent(new Event('seeking'));
-        video.dispatchEvent(new Event('seeked'));
-        video.dispatchEvent(new Event('timeupdate'));
-        if (video.paused) video.play().catch(() => {});
-        logToPopup(`Seeked to ${targetTime.toFixed(1)}s / ${duration.toFixed(1)}s`, 'info');
-      }
-
-      // Check if video reached completion
-      if (video.ended || video.currentTime >= duration - 0.8) {
-        lastCompletedUrl = currentNormalized;
-        const details = getPageDetails();
-        logToPopup(`✓ Completed: ${details.lessonTitle}`, 'success');
-
-        // Short pause before advancing
-        setTimeout(() => {
-          if (isRunning && !isPausedForUser) {
-            advanceToNextTopic();
+      if (!hasSeekedCurrentVideo && video.currentTime < targetTime - 1) {
+        // Ensure readyState is sufficient before seeking
+        if (video.readyState >= 1) {
+          video.currentTime = targetTime;
+          video.dispatchEvent(new Event('seeking'));
+          video.dispatchEvent(new Event('seeked'));
+          video.dispatchEvent(new Event('timeupdate'));
+          if (video.paused) {
+            video.play().catch(() => {});
           }
-        }, 1200);
+          hasSeekedCurrentVideo = true;
+          const details = getPageDetails();
+          logToPopup(`▶ ${details.lessonTitle}: Seeked to ${targetTime.toFixed(1)}s / ${duration.toFixed(1)}s`, 'info');
+        }
         return;
       }
 
-      timerId = setTimeout(startAutomationLoop, 500);
+      // 6. Check Completion
+      const isNearEnd = video.currentTime >= Math.max(0, duration - 0.9);
+      const isEnded = video.ended;
+
+      if (isEnded || (hasSeekedCurrentVideo && isNearEnd)) {
+        if (lastCompletedVideoKey !== currentKey) {
+          lastCompletedVideoKey = currentKey;
+          const details = getPageDetails();
+          logToPopup(`✓ Completed: ${details.lessonTitle}`, 'success');
+        }
+
+        // Advance to next video
+        const now = Date.now();
+        if (now - lastAdvanceTime >= 1200) {
+          lastAdvanceTime = now;
+          advanceToNextTopic();
+        }
+      }
     } catch (err) {
-      console.warn('CoursePilot iteration error:', err);
-      timerId = setTimeout(startAutomationLoop, 2000);
+      console.warn('CoursePilot tick error:', err);
+    } finally {
+      isProcessingTick = false;
     }
   }
 
   function advanceToNextTopic() {
+    advanceAttemptCount++;
+    lastAdvanceTime = Date.now();
     logToPopup('Advancing to next topic video...', 'info');
 
-    // Strategy 1: Dedicated classroom / item next buttons
+    // Strategy 1: Dedicated next buttons
     const nextButtonSelectors = isLnt ? [
       'button.next-btn',
       'button.btn-next',
@@ -344,6 +423,8 @@
       'a[data-e2e="next-button"]',
       'a[aria-label="Next Item" i]',
       'button[aria-label="Next Item" i]',
+      'a[aria-label="Next lesson" i]',
+      'button[aria-label="Next lesson" i]',
       '.rc-NextItemButton button',
       '.rc-NextItemButton a'
     ] : [
@@ -351,40 +432,70 @@
       '.classroom-nav button[aria-label="Next item" i]',
       '.classroom-nav button[aria-label="Next lesson" i]',
       '.classroom-nav button[aria-label="Next video" i]',
+      '.classroom-nav button[aria-label*="Next" i]',
+      '.classroom-player-controls button[aria-label*="Next" i]',
       'button.classroom-nav__next-button',
-      'button[aria-label*="Next" i]'
+      'button[data-control-name="next_item"]',
+      'button[data-control-name="next_chapter"]',
+      'button[data-control-name="next_section"]',
+      '.vjs-next-button'
     ]);
 
     for (const sel of nextButtonSelectors) {
-      const nextBtn = document.querySelector(sel);
-      if (nextBtn) {
-        const isEnabled = !nextBtn.hasAttribute('disabled') && nextBtn.getAttribute('aria-disabled') !== 'true';
-        if (isEnabled) {
-          nextBtn.click();
-          timerId = setTimeout(startAutomationLoop, 2500);
-          return;
+      const nextBtns = document.querySelectorAll(sel);
+      for (const nextBtn of nextBtns) {
+        if (nextBtn) {
+          const isEnabled = !nextBtn.hasAttribute('disabled') && nextBtn.getAttribute('aria-disabled') !== 'true';
+          const isVisible = nextBtn.offsetWidth > 0 || nextBtn.offsetHeight > 0 || nextBtn.offsetParent !== null;
+          if (isEnabled && isVisible) {
+            nextBtn.scrollIntoView?.({ block: 'nearest' });
+            nextBtn.click();
+            return;
+          }
         }
       }
     }
 
-    // Strategy 2: Syllabus TOC links
+    // Strategy 2: Autoplay banner or toast prompt
+    const autoplaySelectors = [
+      'button[data-test-autoplay-next-button]',
+      '.next-item-banner button',
+      '.classroom-player-toast button',
+      '[data-test-autoplay-container] button',
+      'button[data-e2e="next-item-banner-button"]',
+      '.rc-NextItemToast button',
+      '.rc-AutoplayToast button',
+      '.autoplay-banner button'
+    ];
+
+    for (const sel of autoplaySelectors) {
+      const bannerBtn = document.querySelector(sel);
+      if (bannerBtn && !bannerBtn.hasAttribute('disabled')) {
+        bannerBtn.click();
+        return;
+      }
+    }
+
+    // Strategy 3: Syllabus / TOC item links
     if (isCoursera) {
-      const nav = document.querySelector('.rc-CourseNav, .rc-LessonsList, .rc-WeekNav') || document.body;
-      const allLinks = Array.from(nav.querySelectorAll('a[href*="/learn/"]'));
+      const nav = document.querySelector('.rc-CourseNav, .rc-LessonsList, .rc-WeekNav, .rc-NavigationDrawer') || document.body;
+      const allLinks = Array.from(nav.querySelectorAll('a[href*="/learn/"], a[data-e2e*="item"]'));
       const currentPath = window.location.pathname.replace(/\/$/, '');
 
       const lessonLinks = allLinks.filter(a => {
-        const p = a.pathname.replace(/\/$/, '');
-        const parts = p.split('/').filter(Boolean);
-        return parts.length >= 2 && parts[0] === 'learn' && !p.endsWith('/home') && !p.endsWith('/my-learning');
+        const p = (a.pathname || '').replace(/\/$/, '');
+        return p && !p.endsWith('/home') && !p.endsWith('/my-learning');
       });
 
-      const currentIdx = lessonLinks.findIndex(a => a.pathname.replace(/\/$/, '') === currentPath);
+      const currentIdx = lessonLinks.findIndex(a => {
+        const p = (a.pathname || '').replace(/\/$/, '');
+        return p === currentPath || a.classList.contains('active') || a.getAttribute('aria-current') === 'page';
+      });
+
       if (currentIdx >= 0 && currentIdx + 1 < lessonLinks.length) {
         const nextAnchor = lessonLinks[currentIdx + 1];
         nextAnchor.scrollIntoView?.({ block: 'nearest' });
         nextAnchor.click();
-        timerId = setTimeout(startAutomationLoop, 2500);
         return;
       }
     } else if (isLnt) {
@@ -396,39 +507,35 @@
         const nextEl = allLinks[currentIdx + 1];
         nextEl.scrollIntoView?.({ block: 'nearest' });
         nextEl.click();
-        timerId = setTimeout(startAutomationLoop, 2500);
         return;
       }
     } else {
-      const sidebar = document.querySelector('.classroom-sidebar, .classroom-toc') || document.body;
+      // LinkedIn Learning TOC Items
+      const sidebar = document.querySelector('.classroom-sidebar, .classroom-toc, [data-test-classroom-sidebar]') || document.body;
       const allLinks = Array.from(sidebar.querySelectorAll('a[href*="/learning/"]'));
       const currentPath = window.location.pathname.replace(/\/$/, '');
 
       const lessonLinks = allLinks.filter(a => {
-        const p = a.pathname.replace(/\/$/, '');
-        const parts = p.split('/').filter(Boolean);
-        return parts.length >= 3 && parts[0] === 'learning' && !p.includes('/me') && !p.includes('/topics');
+        const p = (a.pathname || '').replace(/\/$/, '');
+        return p.includes('/learning/') && !p.includes('/me') && !p.includes('/topics');
       });
 
-      const currentIdx = lessonLinks.findIndex(a => a.pathname.replace(/\/$/, '') === currentPath);
+      const currentIdx = lessonLinks.findIndex(a => {
+        const p = (a.pathname || '').replace(/\/$/, '');
+        return p === currentPath || a.closest('.classroom-toc-item--active') || a.closest('[data-test-toc-item-active]');
+      });
+
       if (currentIdx >= 0 && currentIdx + 1 < lessonLinks.length) {
         const nextAnchor = lessonLinks[currentIdx + 1];
         nextAnchor.scrollIntoView?.({ block: 'nearest' });
         nextAnchor.click();
-        timerId = setTimeout(startAutomationLoop, 2500);
         return;
       }
     }
 
-    // Fallback: Autoplay banner
-    const autoplayBtn = document.querySelector('button[data-test-autoplay-next-button], .next-item-banner button, button[data-e2e="next-item-banner-button"], .rc-AutoplayToast button');
-    if (autoplayBtn) {
-      autoplayBtn.click();
-      timerId = setTimeout(startAutomationLoop, 2500);
-      return;
+    if (advanceAttemptCount % 6 === 0) {
+      logToPopup('Waiting for next lesson link to become available...', 'warning');
     }
-
-    logToPopup('Could not find next lesson link. Pausing.', 'warning');
   }
 
   function showFloatingOverlay() {
@@ -504,16 +611,12 @@
     document.getElementById('cp-hud-resume')?.addEventListener('click', () => {
       isPausedForUser = false;
       removeFloatingOverlay();
-      logToPopup('Resumed from floating HUD');
-      startAutomationLoop();
+      logToPopup('Resumed from floating HUD', 'info');
+      handleResume();
     });
 
     document.getElementById('cp-hud-stop')?.addEventListener('click', () => {
-      isRunning = false;
-      isPausedForUser = false;
-      chrome.storage.local.set({ isRunning: false });
-      removeFloatingOverlay();
-      logToPopup('Stopped from floating HUD');
+      handleStop();
     });
 
     // Make Draggable
@@ -546,5 +649,16 @@
     const el = document.getElementById('coursepilot-floating-overlay');
     if (el) el.remove();
   }
+
+  // SPA navigation listeners to immediately trigger on route changes
+  window.addEventListener('popstate', () => {
+    activeVideoKey = null;
+    hasSeekedCurrentVideo = false;
+  });
+  window.addEventListener('hashchange', () => {
+    activeVideoKey = null;
+    hasSeekedCurrentVideo = false;
+  });
 })();
+
 

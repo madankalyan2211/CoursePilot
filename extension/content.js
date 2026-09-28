@@ -269,29 +269,35 @@
     const activeTocSelectors = [
       '[data-test-toc-item-active]',
       '.classroom-toc-item--active',
+      '.classroom-toc-item--selected',
       '.classroom-sidebar__item--active',
+      '.classroom-sidebar__item--selected',
       'li.classroom-nav__item--active',
-      'li[aria-current="true"]',
       'li.classroom-toc-item.active',
+      'li.classroom-toc-item[aria-current="true"]',
+      'li[aria-current="true"]',
+      'li[aria-selected="true"]',
       'li.active',
       'a[aria-current="page"]',
       'a.active'
     ];
 
     for (const sel of activeTocSelectors) {
-      const item = document.querySelector(sel);
-      if (item) {
-        // If it contains a check icon, it's completed (green checkmark!)
-        const checkIcon = item.querySelector('svg[data-test-icon*="check" i], svg[data-test-icon="check-small"], svg[data-test-icon="check-medium"], .completed-icon, svg[data-e2e*="complete"], .rc-CompletedIcon, i.fa-check-circle, .completed');
-        if (checkIcon) return true;
+      const items = document.querySelectorAll(sel);
+      for (const item of items) {
+        if (item) {
+          // If it contains a check icon, it's completed (green checkmark!)
+          const checkIcon = item.querySelector('svg[data-test-icon*="check" i], svg[data-test-icon="check-small"], svg[data-test-icon="check-medium"], .completed-icon, svg[data-e2e*="complete"], .rc-CompletedIcon, i.fa-check-circle, .completed');
+          if (checkIcon) return true;
 
-        // Class-based checks
-        if (
-          item.classList.contains('completed') ||
-          item.classList.contains('classroom-toc-item--completed') ||
-          item.getAttribute('data-test-toc-item-completed') !== null
-        ) {
-          return true;
+          // Class-based checks
+          if (
+            item.classList.contains('completed') ||
+            item.classList.contains('classroom-toc-item--completed') ||
+            item.getAttribute('data-test-toc-item-completed') !== null
+          ) {
+            return true;
+          }
         }
       }
     }
@@ -303,13 +309,12 @@
       for (const a of allTocLinks) {
         const p = (a.pathname || '').replace(/\/$/, '');
         if (p && p === currentPath) {
-          const parent = a.closest('li') || a.parentElement || a;
-          if (
-            parent.querySelector('svg[data-test-icon*="check" i], svg[data-e2e*="complete"], .completed-icon') ||
-            parent.classList.contains('classroom-toc-item--completed') ||
-            parent.classList.contains('completed')
-          ) {
-            return true;
+          const parent = a.closest('li') || a.closest('div') || a.parentElement;
+          if (parent) {
+            const hasCheck = parent.querySelector('svg[data-test-icon*="check" i], svg[data-e2e*="complete"], .completed-icon');
+            if (hasCheck || parent.classList.contains('classroom-toc-item--completed') || parent.classList.contains('completed')) {
+              return true;
+            }
           }
         }
       }
@@ -494,7 +499,29 @@
     lastAdvanceTime = Date.now();
     logToPopup('Advancing to next topic video...', 'info');
 
-    // Strategy 1: Dedicated next buttons
+    // Strategy 1: Autoplay banner or toast prompt (OFFICIAL platform completion trigger)
+    const autoplaySelectors = [
+      'button[data-test-autoplay-next-button]',
+      '.next-item-banner button',
+      '.classroom-player-toast button',
+      '[data-test-autoplay-container] button',
+      'button[data-e2e="next-item-banner-button"]',
+      '.rc-NextItemToast button',
+      '.rc-AutoplayToast button',
+      '.autoplay-banner button'
+    ];
+
+    for (const sel of autoplaySelectors) {
+      const bannerBtns = document.querySelectorAll(sel);
+      for (const bannerBtn of bannerBtns) {
+        if (bannerBtn && !bannerBtn.hasAttribute('disabled')) {
+          bannerBtn.click();
+          return;
+        }
+      }
+    }
+
+    // Strategy 2: Dedicated classroom / item next buttons
     const nextButtonSelectors = isLnt ? [
       'button.next-btn',
       'button.btn-next',
@@ -548,27 +575,13 @@
       }
     }
 
-    // Strategy 2: Autoplay banner or toast prompt
-    const autoplaySelectors = [
-      'button[data-test-autoplay-next-button]',
-      '.next-item-banner button',
-      '.classroom-player-toast button',
-      '[data-test-autoplay-container] button',
-      'button[data-e2e="next-item-banner-button"]',
-      '.rc-NextItemToast button',
-      '.rc-AutoplayToast button',
-      '.autoplay-banner button'
-    ];
+    // Strategy 3: Native Shift+N hotkey for LinkedIn Learning
+    try {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'N', code: 'KeyN', shiftKey: true, bubbles: true }));
+      document.dispatchEvent(new KeyboardEvent('keyup', { key: 'N', code: 'KeyN', shiftKey: true, bubbles: true }));
+    } catch {}
 
-    for (const sel of autoplaySelectors) {
-      const bannerBtn = document.querySelector(sel);
-      if (bannerBtn && !bannerBtn.hasAttribute('disabled')) {
-        bannerBtn.click();
-        return;
-      }
-    }
-
-    // Strategy 3: Syllabus / TOC item links
+    // Strategy 4: Syllabus / TOC item links
     if (isCoursera) {
       const nav = document.querySelector('.rc-CourseNav, .rc-LessonsList, .rc-WeekNav, .rc-NavigationDrawer') || document.body;
       const allLinks = Array.from(nav.querySelectorAll('a[href*="/learn/"], a[data-e2e*="item"]'));

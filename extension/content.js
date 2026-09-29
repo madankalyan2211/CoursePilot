@@ -121,14 +121,15 @@
     if (areaName === 'local') {
       if (changes.linkedInPlaybackRate) {
         linkedInPlaybackRate = Number(changes.linkedInPlaybackRate.newValue) || LINKEDIN_PLAYBACK_RATE_DEFAULT;
+        const effectiveRate = Math.min(16.0, Math.max(0.5, linkedInPlaybackRate));
         const video = findActiveVideoElement();
         if (video) {
-          try { video.playbackRate = linkedInPlaybackRate; } catch (e) {}
+          try { video.playbackRate = effectiveRate; } catch (e) {}
           if (isLinkedIn) {
-            applyLinkedInNativePlayback(linkedInPlaybackRate);
+            applyLinkedInNativePlayback(effectiveRate);
           }
         }
-        console.log(`[CoursePilot][LinkedIn] playbackRate dynamically updated to ${linkedInPlaybackRate}x`);
+        console.log(`[CoursePilot][LinkedIn] playbackRate dynamically updated to ${effectiveRate}x (requested: ${linkedInPlaybackRate}x)`);
       }
       if (changes.actionTrigger) {
         const action = changes.actionTrigger.newValue;
@@ -549,33 +550,115 @@
    * Uses Video.js and native video APIs to start playback at accelerated rate (default 4x, muted).
    * Does NOT seek, does NOT dispatch synthetic events, allowing LinkedIn telemetry to observe genuine watch time.
    */
+  /**
+   * LinkedIn Main-World Injection: Genuine Native Accelerated Playback
+   * Sets and locks the HTML5 video and Video.js player instances to the target speed.
+   * Clamped to 16.0 (Chromium's maximum supported rate).
+   * Automatically disables audio bottlenecks and enforces low-bitrate stream quality (360p)
+   * to eliminate frame dropping and buffering stalls.
+   */
   function applyLinkedInNativePlayback(rate = 4.0) {
+    const safeRate = Math.min(16.0, Math.max(0.5, Number(rate) || 4.0));
     executeInPageContext(`
-      try {
+      (function() {
+        const targetRate = ${safeRate};
+
+        // 1. Force Video.js player instances to accept and lock targetRate
         if (window.videojs) {
-          const players = window.videojs.getPlayers ? window.videojs.getPlayers() : window.videojs.players;
-          if (players) {
-            for (const key in players) {
-              const p = players[key];
-              if (p && typeof p.play === 'function') {
-                try { p.muted(true); } catch(e) {}
-                try { p.playbackRate(${rate}); } catch(e) {}
-                p.play();
+          try {
+            const players = window.videojs.getPlayers ? window.videojs.getPlayers() : window.videojs.players;
+            if (players) {
+              for (const key in players) {
+                const p = players[key];
+                if (p) {
+                  try { p.muted(true); } catch(e) {}
+                  try { p.volume(0); } catch(e) {}
+
+                  // Allow Video.js to accept rates up to 16x without rejecting
+                  if (p.options_) {
+                    p.options_.playbackRates = [0.5, 1, 2, 4, 6, 8, 12, 16];
+                  }
+                  if (typeof p.playbackRates === 'function') {
+                    try { p.playbackRates([0.5, 1, 2, 4, 6, 8, 12, 16]); } catch(e) {}
+                  }
+                  if (typeof p.playbackRate === 'function') {
+                    try { p.playbackRate(targetRate); } catch(e) {}
+                  }
+                  if (p.tech_ && typeof p.tech_.setPlaybackRate === 'function') {
+                    try { p.tech_.setPlaybackRate(targetRate); } catch(e) {}
+                  }
+
+                  // Force lowest video quality level (360p) so network and decoder sustain 16x smoothly
+                  if (p.qualityLevels) {
+                    try {
+                      const ql = p.qualityLevels();
+                      if (ql && ql.length > 0) {
+                        for (let i = 0; i < ql.length; i++) {
+                          ql[i].enabled = (i === 0);
+                        }
+                      }
+                    } catch(e) {}
+                  }
+
+                  if (typeof p.play === 'function') {
+                    try { p.play(); } catch(e) {}
+                  }
+                }
               }
             }
-          }
+          } catch(e) {}
         }
+
+        // 2. Configure and lock native HTML5 video elements
         const vids = document.querySelectorAll('video');
         vids.forEach(v => {
-          if (v && v.duration > 0) {
-            v.muted = true;
-            try { v.playbackRate = ${rate}; } catch(e) {}
-            if (v.paused) {
-              v.play().catch(() => {});
+          if (!v) return;
+          v.muted = true;
+          v.defaultMuted = true;
+          try { v.volume = 0; } catch(e) {}
+
+          // Disable audio tracks to eliminate Chromium AudioRenderer throttling at >4x
+          try {
+            if (v.audioTracks) {
+              for (let i = 0; i < v.audioTracks.length; i++) {
+                v.audioTracks[i].enabled = false;
+              }
             }
+          } catch(e) {}
+
+          // Directly invoke native setter on HTMLMediaElement prototype
+          try {
+            const setter = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'playbackRate')?.set;
+            if (setter) {
+              setter.call(v, targetRate);
+            } else {
+              v.playbackRate = targetRate;
+            }
+          } catch(e) {
+            try { v.playbackRate = targetRate; } catch(e2) {}
+          }
+
+          // Enforce target rate: prevent LinkedIn or Video.js from resetting speed on ratechange
+          if (!v._coursepilot_rate_locked) {
+            v._coursepilot_rate_locked = true;
+            v.addEventListener('ratechange', function() {
+              const desired = window.__coursepilot_target_rate || targetRate;
+              if (Math.abs(v.playbackRate - desired) > 0.05 && desired <= 16.0) {
+                try {
+                  const s = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'playbackRate')?.set;
+                  if (s) s.call(v, desired);
+                  else v.playbackRate = desired;
+                } catch(e) {}
+              }
+            }, true);
+          }
+          window.__coursepilot_target_rate = targetRate;
+
+          if (v.paused && v.duration > 0) {
+            v.play().catch(() => {});
           }
         });
-      } catch(e) {}
+      })();
     `);
   }
 
@@ -727,11 +810,13 @@
         if (!linkedInState.started) {
           if (video.readyState >= 1) {
             video.muted = true;
+            video.defaultMuted = true;
+            const effectiveRate = Math.min(16.0, Math.max(0.5, linkedInPlaybackRate));
             try {
-              video.playbackRate = linkedInPlaybackRate;
+              video.playbackRate = effectiveRate;
             } catch (e) {}
 
-            applyLinkedInNativePlayback(linkedInPlaybackRate);
+            applyLinkedInNativePlayback(effectiveRate);
 
             if (video.paused) {
               video.play().catch(() => {});
@@ -739,9 +824,9 @@
 
             linkedInState.started = true;
             console.log('[CoursePilot][LinkedIn] native playback started');
-            console.log(`[CoursePilot][LinkedIn] playbackRate=${linkedInPlaybackRate}`);
+            console.log(`[CoursePilot][LinkedIn] playbackRate=${effectiveRate}x (requested: ${linkedInPlaybackRate}x)`);
             const details = getPageDetails();
-            logToPopup(`▶ ${details.lessonTitle}: Playing natively (${linkedInPlaybackRate}x, muted)...`, 'info');
+            logToPopup(`▶ ${details.lessonTitle}: Playing natively (${effectiveRate}x, muted)...`, 'info');
           }
           return;
         }
@@ -752,10 +837,12 @@
         }
         if (!video.muted) {
           video.muted = true;
+          video.defaultMuted = true;
         }
-        if (Math.abs(video.playbackRate - linkedInPlaybackRate) > 0.1) {
-          try { video.playbackRate = linkedInPlaybackRate; } catch (e) {}
-          applyLinkedInNativePlayback(linkedInPlaybackRate);
+        const effectiveRate = Math.min(16.0, Math.max(0.5, linkedInPlaybackRate));
+        if (Math.abs(video.playbackRate - effectiveRate) > 0.05) {
+          try { video.playbackRate = effectiveRate; } catch (e) {}
+          applyLinkedInNativePlayback(effectiveRate);
         }
 
         // Step C: Monitor genuine watched time

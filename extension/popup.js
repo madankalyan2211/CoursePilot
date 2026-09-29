@@ -40,7 +40,11 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
     if (speedCurrentBadge) {
-      speedCurrentBadge.innerText = `${num}x`;
+      if (num >= 32) {
+        speedCurrentBadge.innerText = '16x (Max)';
+      } else {
+        speedCurrentBadge.innerText = `${num}x`;
+      }
     }
   }
 
@@ -49,7 +53,8 @@ document.addEventListener('DOMContentLoaded', () => {
       const speed = Number(btn.getAttribute('data-speed')) || 4;
       updateSpeedUi(speed);
       chrome.storage.local.set({ linkedInPlaybackRate: speed });
-      addLog(`⚡ Speed changed to ${speed}x`, 'info');
+      const displaySpeed = speed >= 32 ? '16x (Chromium Hardware Max)' : `${speed}x`;
+      addLog(`⚡ Speed set to ${displaySpeed}`, 'info');
     });
   });
 

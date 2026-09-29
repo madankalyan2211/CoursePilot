@@ -617,90 +617,7 @@
 
       const currentKey = getVideoIdentifier(video);
 
-      // ---------------------------------------------------------
-      // LinkedIn Learning: Genuine Accelerated Playback Flow
-      // ---------------------------------------------------------
-      if (isLinkedIn) {
-        installLinkedInDiagnosticObserver();
-
-        // Detect video change / reset per-video state
-        if (currentKey !== linkedInState.contentId) {
-          activeVideoKey = currentKey;
-          resetLinkedInState(currentKey);
-          syncStateToStorage();
-          console.log('[CoursePilot][LinkedIn] video detected');
-        }
-
-        if (linkedInState.advancing) {
-          if (Date.now() - lastAdvanceTime > 2500) {
-            console.log('[CoursePilot][LinkedIn] Advance attempt timeout — unlocking to retry...');
-            linkedInState.advancing = false;
-          } else {
-            return;
-          }
-        }
-
-        // Step A: Start native accelerated playback (idempotent, once per video)
-        if (!linkedInState.started) {
-          if (video.readyState >= 1) {
-            video.muted = true;
-            video.defaultMuted = true;
-            const effectiveRate = Math.min(16.0, Math.max(0.5, linkedInPlaybackRate));
-            try {
-              video.playbackRate = effectiveRate;
-            } catch (e) {}
-
-            applyLinkedInNativePlayback(effectiveRate);
-
-            if (video.paused) {
-              video.play().catch(() => {});
-            }
-
-            linkedInState.started = true;
-            console.log('[CoursePilot][LinkedIn] native playback started');
-            console.log(`[CoursePilot][LinkedIn] playbackRate=${effectiveRate}x (requested: ${linkedInPlaybackRate}x)`);
-            const details = getPageDetails();
-            logToPopup(`▶ ${details.lessonTitle}: Playing natively (${effectiveRate}x, muted)...`, 'info');
-          }
-          return;
-        }
-
-        // Step B: Maintain genuine playback during watchdog ticks
-        const effectiveRate = Math.min(16.0, Math.max(0.5, linkedInPlaybackRate));
-        if (video.readyState >= 2 && Math.abs(video.playbackRate - effectiveRate) > 0.05) {
-          try { video.playbackRate = effectiveRate; } catch (e) {}
-        }
-
-        // Step C: Check completion (TOC green checkmark or video reached end)
-        const isEnded = video.ended || (duration > 0 && video.currentTime >= duration - 0.6);
-        const isCompletedInToc = isCurrentLessonCompletedOnLinkedIn();
-
-        if (isCompletedInToc || isEnded) {
-          if (!linkedInState.completionDetected) {
-            linkedInState.completionDetected = true;
-            linkedInState.waitStartTime = Date.now();
-            const details = getPageDetails();
-            logToPopup(`✓ ${details.lessonTitle}: Completed! Advancing...`, 'success');
-          }
-
-          if (!linkedInState.advancing) {
-            const elapsed = Date.now() - (linkedInState.waitStartTime || Date.now());
-            if (elapsed >= 1000 || isCompletedInToc) {
-              linkedInState.advancing = true;
-              lastCompletedVideoKey = currentKey;
-              lastAdvanceTime = Date.now();
-              advanceToNextTopic();
-            }
-          }
-          return;
-        }
-
-        return;
-      }
-
-      // ---------------------------------------------------------
-      // Coursera & L&T EduTech: Existing Fast-Forward & Completion
-      // ---------------------------------------------------------
+      // 4. If this is a new video, reset per-video flags
       if (currentKey !== activeVideoKey) {
         activeVideoKey = currentKey;
         hasSeekedCurrentVideo = false;
@@ -709,40 +626,47 @@
         syncStateToStorage();
       }
 
-      if (!hasSeekedCurrentVideo) {
+      // 5. THE VIDEO SKIPPER: Fast-forward directly to near end
+      const targetTime = Math.max(0, duration - seekOffset);
+
+      if (!hasSeekedCurrentVideo && video.currentTime < targetTime - 0.5) {
         if (video.readyState >= 1) {
-          triggerCourseraLntFastForward(seekOffset);
-
           video.muted = true;
-          try {
-            video.playbackRate = 16.0;
-          } catch {}
+          video.defaultMuted = true;
+          try { video.volume = 0; } catch (e) {}
 
-          const targetTime = Math.max(0, duration - seekOffset);
+          const effectiveRate = isLinkedIn
+            ? Math.min(16.0, Math.max(1.0, linkedInPlaybackRate || 16.0))
+            : 16.0;
+
+          try {
+            video.playbackRate = effectiveRate;
+          } catch (e) {}
+
           video.currentTime = targetTime;
           video.dispatchEvent(new Event('seeking', { bubbles: true }));
           video.dispatchEvent(new Event('seeked', { bubbles: true }));
           video.dispatchEvent(new Event('timeupdate', { bubbles: true }));
+
           if (video.paused) {
             video.play().catch(() => {});
           }
 
           hasSeekedCurrentVideo = true;
           const details = getPageDetails();
-          logToPopup(`▶ ${details.lessonTitle}: Fast-forwarding (16x) to end...`, 'info');
+          logToPopup(`▶ ${details.lessonTitle}: Skipped to ${targetTime.toFixed(1)}s / ${duration.toFixed(1)}s`, 'info');
         }
         return;
       }
 
-      if (hasSeekedCurrentVideo) {
-        triggerCourseraLntFastForward(seekOffset);
-        if (video.paused && !video.ended) {
-          video.play().catch(() => {});
-        }
+      // Keep playback active through the final seconds
+      if (hasSeekedCurrentVideo && video.paused && !video.ended && video.currentTime < duration - 0.2) {
+        video.play().catch(() => {});
       }
 
-      const isNaturalEnd = video.ended || video.currentTime >= duration - 0.1;
-      const isTocCompleted = isMarkedCompletedInToc();
+      // 6. Check Completion
+      const isNaturalEnd = video.ended || video.currentTime >= Math.max(0, duration - 0.6);
+      const isTocCompleted = isLinkedIn ? isCurrentLessonCompletedOnLinkedIn() : isMarkedCompletedInToc();
 
       if (hasSeekedCurrentVideo && (isNaturalEnd || isTocCompleted)) {
         if (!videoCompletedTimestamp) {
@@ -750,17 +674,17 @@
         }
 
         const elapsedSinceEnd = Date.now() - videoCompletedTimestamp;
+        const requiredWait = isTocCompleted ? 400 : (isLinkedIn ? 800 : 2500);
 
-        if (isTocCompleted || elapsedSinceEnd >= 4000) {
+        if (elapsedSinceEnd >= requiredWait) {
           if (lastCompletedVideoKey !== currentKey) {
             lastCompletedVideoKey = currentKey;
             const details = getPageDetails();
-            const statusLabel = isTocCompleted ? '✓ Completed' : '✓ Completed';
-            logToPopup(`✓ ${details.lessonTitle}: ${statusLabel}`, 'success');
+            logToPopup(`✓ Completed: ${details.lessonTitle}`, 'success');
           }
 
           const now = Date.now();
-          if (now - lastAdvanceTime >= 1000) {
+          if (now - lastAdvanceTime >= 800) {
             lastAdvanceTime = now;
             videoCompletedTimestamp = 0;
             advanceToNextTopic();
@@ -804,7 +728,7 @@
         console.log('[CoursePilot] Navigation click did not change URL. Hard navigating to:', targetHref);
         window.location.href = targetHref;
       }
-    }, 1200);
+    }, 800);
   }
 
   function getLinkedInCourseLessons() {
@@ -812,8 +736,7 @@
     const pathParts = currentPath.split('/').filter(Boolean);
     const courseSlug = (pathParts[0] === 'learning' && pathParts[1]) ? pathParts[1] : '';
 
-    const sidebar = document.querySelector('.classroom-sidebar, .classroom-toc, [data-test-classroom-sidebar]') || document.body;
-    const allAnchors = Array.from(sidebar.querySelectorAll('a[href*="/learning/"]'));
+    const allAnchors = Array.from(document.querySelectorAll('a[href*="/learning/"]'));
 
     const uniqueLessons = [];
     const seenPaths = new Set();

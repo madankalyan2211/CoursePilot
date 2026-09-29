@@ -190,11 +190,12 @@ class LinkedInPlaybackController {
       } catch (err2) {}
     }
 
-    this.effectiveRate = this.video.playbackRate;
+    this.effectiveRate = safeRate;
   }
 
   public setSpeed(newRate: number): void {
     this.requestedRate = Number(newRate) || 100;
+    this.lastRestoreTime = -999999;
     this.applySpeed();
   }
 
@@ -344,6 +345,32 @@ describe('LinkedInPlaybackController (Video Speed Controller Architecture)', () 
     // Should immediately restore to 16
     expect(video.playbackRate).toBe(16);
     expect(controller.effectiveRate).toBe(16);
+
+    controller.destroy();
+  });
+
+  it('should not allow site clamping to 2.0x to corrupt effectiveRate and should restore speed', () => {
+    const controller = new LinkedInPlaybackController(video, 16);
+    expect(controller.effectiveRate).toBe(16);
+
+    // Simulate site player forcing 2.0x clamp
+    video.playbackRate = 2.0;
+    video.dispatchEvent(new Event('ratechange'));
+
+    // Controller should NOT accept 2.0 as effectiveRate; it should fight back to 16
+    expect(controller.effectiveRate).toBe(16);
+    expect(video.playbackRate).toBe(16);
+
+    // Now user sets 6x
+    controller.setSpeed(6);
+    expect(controller.effectiveRate).toBe(6);
+    expect(video.playbackRate).toBe(6);
+
+    // Site again tries 2.0x
+    video.playbackRate = 2.0;
+    video.dispatchEvent(new Event('ratechange'));
+    expect(controller.effectiveRate).toBe(6);
+    expect(video.playbackRate).toBe(6);
 
     controller.destroy();
   });

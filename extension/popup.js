@@ -61,6 +61,55 @@ document.addEventListener('DOMContentLoaded', () => {
         target: { tabId, allFrames: true },
         world: 'MAIN',
         func: (rate) => {
+          const safeRate = Math.min(16.0, Math.max(0.0625, Number(rate) || 1.0));
+          window.__coursepilot_desired_speed = safeRate;
+          try {
+            document.documentElement?.setAttribute('data-coursepilot-speed', String(safeRate));
+            window.postMessage({ type: '__coursepilot_set_speed', speed: safeRate }, '*');
+          } catch (e) {}
+
+          // Ensure prototype setter is installed in this frame
+          ['playbackRate', 'defaultPlaybackRate'].forEach((prop) => {
+            try {
+              const desc = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, prop);
+              if (desc && desc.set && !desc.__coursepilot_hooked) {
+                const origSet = desc.set;
+                const origGet = desc.get;
+                const wrapped = function (val) {
+                  const desired = window.__coursepilot_desired_speed || Number(document.documentElement?.getAttribute('data-coursepilot-speed'));
+                  if (desired && !window.__coursepilot_writing) {
+                    origSet.call(this, desired);
+                  } else {
+                    origSet.call(this, val);
+                  }
+                };
+                wrapped.__coursepilot_hooked = true;
+                Object.defineProperty(HTMLMediaElement.prototype, prop, {
+                  get: origGet,
+                  set: wrapped,
+                  configurable: true,
+                  enumerable: true
+                });
+              }
+            } catch (e) {}
+          });
+
+          try {
+            if (typeof window.videojs === 'function' && window.videojs.players) {
+              Object.values(window.videojs.players).forEach((p) => {
+                if (p && typeof p.playbackRate === 'function' && !p.__coursepilot_hooked) {
+                  p.__coursepilot_hooked = true;
+                  const origRate = p.playbackRate.bind(p);
+                  p.playbackRate = function (newRate) {
+                    if (arguments.length === 0) return origRate();
+                    const desired = window.__coursepilot_desired_speed || Number(document.documentElement?.getAttribute('data-coursepilot-speed'));
+                    return origRate(desired && !window.__coursepilot_writing ? desired : newRate);
+                  };
+                }
+              });
+            }
+          } catch (e) {}
+
           function findVideos(root = document) {
             let list = [];
             try { list.push(...root.querySelectorAll('video')); } catch (e) {}
@@ -72,21 +121,21 @@ document.addEventListener('DOMContentLoaded', () => {
             } catch (e) {}
             return list;
           }
-          const safeRate = Math.min(16.0, Math.max(0.0625, Number(rate) || 1.0));
-          window.__coursepilot_desired_speed = safeRate;
+
+          window.__coursepilot_writing = true;
           try {
-            document.documentElement?.setAttribute('data-coursepilot-speed', String(safeRate));
-            window.postMessage({ type: '__coursepilot_set_speed', speed: safeRate }, '*');
-          } catch (e) {}
-          findVideos(document).forEach((v) => {
-            try {
-              v.playbackRate = safeRate;
-              v.defaultPlaybackRate = safeRate;
-              if (v.player && typeof v.player.playbackRate === 'function') {
-                v.player.playbackRate(safeRate);
-              }
-            } catch (e) {}
-          });
+            findVideos(document).forEach((v) => {
+              try {
+                v.playbackRate = safeRate;
+                v.defaultPlaybackRate = safeRate;
+                if (v.player && typeof v.player.playbackRate === 'function') {
+                  v.player.playbackRate(safeRate);
+                }
+              } catch (e) {}
+            });
+          } finally {
+            window.__coursepilot_writing = false;
+          }
         },
         args: [speed]
       }).catch(() => {});

@@ -47,6 +47,15 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
 
 // When a tab finishes updating / loading
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status === 'complete' || changeInfo.status === 'loading') {
+    if (tab && tab.url && (tab.url.includes('linkedin.com') || tab.url.includes('coursera.org'))) {
+      chrome.scripting?.executeScript({
+        target: { tabId, allFrames: true },
+        world: 'MAIN',
+        files: ['injected.js']
+      }).catch(() => {});
+    }
+  }
   if (changeInfo.status === 'complete' && activeQuizState) {
     if (tab && tab.url && !tab.url.startsWith('chrome://') && !tab.url.startsWith('edge://')) {
       injectGlobalHudIntoTab(tabId, activeQuizState);
@@ -60,6 +69,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     activeQuizState = request.data || {};
     triggerGlobalQuizNotice(activeQuizState, sender.tab?.id);
     sendResponse({ status: 'NOTICED' });
+  } else if (request.type === 'ENSURE_MAIN_SCRIPT' && sender.tab?.id) {
+    chrome.scripting?.executeScript({
+      target: { tabId: sender.tab.id, allFrames: true },
+      world: 'MAIN',
+      files: ['injected.js']
+    }).then(() => sendResponse({ status: 'INJECTED' })).catch(() => sendResponse({ status: 'FAILED' }));
+    return true;
   } else if (request.type === 'FOCUS_COURSE_TAB') {
     focusCourseTab();
     sendResponse({ status: 'FOCUSED' });

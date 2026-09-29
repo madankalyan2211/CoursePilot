@@ -45,6 +45,19 @@
   const linkedInControllers = new WeakMap();
   let currentLinkedInController = null;
 
+  function ensureMainWorldInjected() {
+    if (document.documentElement?.getAttribute('data-coursepilot-main-installed')) return;
+    try {
+      const script = document.createElement('script');
+      script.src = chrome.runtime.getURL('injected.js');
+      script.onload = () => script.remove();
+      (document.head || document.documentElement).appendChild(script);
+    } catch (e) {}
+    try {
+      chrome.runtime.sendMessage({ type: 'ENSURE_MAIN_SCRIPT' });
+    } catch (e) {}
+  }
+
   // Load initial settings
   chrome.storage.local.get(['isRunning', 'seekOffset', 'hasStarred', 'linkedInPlaybackRate'], (res) => {
     isRunning = Boolean(res.isRunning) && Boolean(res.hasStarred);
@@ -53,6 +66,7 @@
       linkedInPlaybackRate = Number(res.linkedInPlaybackRate) || LINKEDIN_PLAYBACK_RATE_DEFAULT;
     }
     if (isLinkedIn) {
+      ensureMainWorldInjected();
       installLinkedInVideoObserver();
       applySpeedGlobally(linkedInPlaybackRate);
     }
@@ -716,13 +730,14 @@
         } catch (err2) {}
       }
 
-      this.effectiveRate = this.video.playbackRate;
+      this.effectiveRate = safeRate;
       console.log(`[CoursePilot][LinkedIn] Requested speed: ${this.requestedRate}x`);
       console.log(`[CoursePilot][LinkedIn] Effective speed: ${this.effectiveRate}x`);
     }
 
     setSpeed(newRate) {
       this.requestedRate = Number(newRate) || 100;
+      this.lastRestoreTime = -999999;
       this.applySpeed();
       const details = getPageDetails();
       logToPopup(`⚡ Speed: ${this.effectiveRate}x (requested ${this.requestedRate}x)`, 'info');
@@ -758,6 +773,14 @@
           console.log('[CoursePilot][LinkedIn] Rate reset detected');
           this.applySpeed();
           console.log(`[CoursePilot][LinkedIn] Rate restored: ${this.effectiveRate}x`);
+        } else {
+          clearTimeout(this._restoreTimeout);
+          this._restoreTimeout = setTimeout(() => {
+            if (!this.completed && Math.abs(this.video.playbackRate - this.effectiveRate) > 0.05) {
+              this.lastRestoreTime = performance.now();
+              this.applySpeed();
+            }
+          }, this.restoreCooldownMs);
         }
       }
     }
@@ -827,6 +850,10 @@
     destroy() {
       this.initialized = false;
       this.playing = false;
+      if (this._restoreTimeout) {
+        clearTimeout(this._restoreTimeout);
+        this._restoreTimeout = null;
+      }
       try {
         this.video.removeEventListener('ratechange', this._onRateChange, true);
         this.video.removeEventListener('play', this._onPlay);
@@ -892,6 +919,7 @@
   }
 
   function applySpeedGlobally(speed) {
+    ensureMainWorldInjected();
     const targetRate = Number(speed) || linkedInPlaybackRate || 100;
     const safeRate = Math.min(16.0, Math.max(0.0625, targetRate));
     linkedInPlaybackRate = targetRate;
@@ -1032,7 +1060,9 @@
         if (!controller) return;
 
         // 1. Enforce effective playback rate if site silently reset it
-        if (Math.abs(video.playbackRate - controller.effectiveRate) > 0.05) {
+        const targetRate = Math.min(16.0, Math.max(0.0625, Number(linkedInPlaybackRate) || 16.0));
+        if (Math.abs(video.playbackRate - targetRate) > 0.05) {
+          controller.requestedRate = linkedInPlaybackRate;
           controller.applySpeed();
         }
 

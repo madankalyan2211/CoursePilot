@@ -18,7 +18,6 @@
   let isWritingSpeed = false;
 
   function getDesiredSpeed() {
-    if (activeDesiredSpeed && activeDesiredSpeed > 0) return activeDesiredSpeed;
     const attr = document.documentElement?.getAttribute('data-coursepilot-speed');
     if (attr) {
       const num = Number(attr);
@@ -27,7 +26,14 @@
         return activeDesiredSpeed;
       }
     }
-    return null;
+    if (window.__coursepilot_desired_speed) {
+      const num = Number(window.__coursepilot_desired_speed);
+      if (num && !isNaN(num) && num > 0) {
+        activeDesiredSpeed = Math.min(16.0, Math.max(0.0625, num));
+        return activeDesiredSpeed;
+      }
+    }
+    return activeDesiredSpeed || null;
   }
 
   function findAllVideos(root = document) {
@@ -51,11 +57,18 @@
     return list;
   }
 
-  const originalDescriptor = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'playbackRate');
-  const nativeSetPlaybackRate = originalDescriptor?.set;
-  const nativeGetPlaybackRate = originalDescriptor?.get;
+  // Intercept both playbackRate and defaultPlaybackRate on HTMLMediaElement prototype
+  const descriptors = {
+    playbackRate: Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'playbackRate'),
+    defaultPlaybackRate: Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'defaultPlaybackRate')
+  };
 
-  if (originalDescriptor && nativeSetPlaybackRate && nativeGetPlaybackRate) {
+  const nativeSetPlaybackRate = descriptors.playbackRate?.set;
+  const nativeGetPlaybackRate = descriptors.playbackRate?.get;
+  const nativeSetDefaultPlaybackRate = descriptors.defaultPlaybackRate?.set;
+  const nativeGetDefaultPlaybackRate = descriptors.defaultPlaybackRate?.get;
+
+  if (descriptors.playbackRate && nativeSetPlaybackRate && nativeGetPlaybackRate) {
     Object.defineProperty(HTMLMediaElement.prototype, 'playbackRate', {
       get() {
         return nativeGetPlaybackRate.call(this);
@@ -64,9 +77,37 @@
         const desired = getDesiredSpeed();
         // If CoursePilot has chosen a speed and site tries to reset/clamp it (e.g. 2.0x), enforce desired speed!
         if (desired !== null && !isWritingSpeed) {
-          nativeSetPlaybackRate.call(this, desired);
+          isWritingSpeed = true;
+          try {
+            nativeSetPlaybackRate.call(this, desired);
+          } finally {
+            isWritingSpeed = false;
+          }
         } else {
           nativeSetPlaybackRate.call(this, val);
+        }
+      },
+      configurable: true,
+      enumerable: true
+    });
+  }
+
+  if (descriptors.defaultPlaybackRate && nativeSetDefaultPlaybackRate && nativeGetDefaultPlaybackRate) {
+    Object.defineProperty(HTMLMediaElement.prototype, 'defaultPlaybackRate', {
+      get() {
+        return nativeGetDefaultPlaybackRate.call(this);
+      },
+      set(val) {
+        const desired = getDesiredSpeed();
+        if (desired !== null && !isWritingSpeed) {
+          isWritingSpeed = true;
+          try {
+            nativeSetDefaultPlaybackRate.call(this, desired);
+          } finally {
+            isWritingSpeed = false;
+          }
+        } else {
+          nativeSetDefaultPlaybackRate.call(this, val);
         }
       },
       configurable: true,
@@ -81,14 +122,21 @@
     try {
       Object.defineProperty(v, 'playbackRate', {
         get() {
-          return nativeGetPlaybackRate.call(this);
+          return nativeGetPlaybackRate ? nativeGetPlaybackRate.call(this) : v.playbackRate;
         },
         set(val) {
           const desired = getDesiredSpeed();
           if (desired !== null && !isWritingSpeed) {
-            nativeSetPlaybackRate.call(this, desired);
+            isWritingSpeed = true;
+            try {
+              if (nativeSetPlaybackRate) nativeSetPlaybackRate.call(this, desired);
+              else v.playbackRate = desired;
+            } finally {
+              isWritingSpeed = false;
+            }
           } else {
-            nativeSetPlaybackRate.call(this, val);
+            if (nativeSetPlaybackRate) nativeSetPlaybackRate.call(this, val);
+            else v.playbackRate = val;
           }
         },
         configurable: true,
@@ -112,6 +160,27 @@
     } catch (e) {}
   }
 
+  function hookGlobalVideoJs() {
+    try {
+      if (typeof window.videojs === 'function' && window.videojs.players) {
+        Object.values(window.videojs.players).forEach((p) => {
+          if (p && typeof p.playbackRate === 'function' && !p.__coursepilot_hooked) {
+            p.__coursepilot_hooked = true;
+            const origRate = p.playbackRate.bind(p);
+            p.playbackRate = function (newRate) {
+              if (arguments.length === 0) return origRate();
+              const desired = getDesiredSpeed();
+              if (desired !== null && !isWritingSpeed) {
+                return origRate(desired);
+              }
+              return origRate(newRate);
+            };
+          }
+        });
+      }
+    } catch (e) {}
+  }
+
   function applySpeed(rate) {
     const num = Number(rate);
     if (!num || isNaN(num) || num <= 0) return;
@@ -122,6 +191,8 @@
     try {
       document.documentElement.setAttribute('data-coursepilot-speed', String(safeRate));
     } catch (e) {}
+
+    hookGlobalVideoJs();
 
     isWritingSpeed = true;
     try {
@@ -134,7 +205,11 @@
           } else {
             v.playbackRate = safeRate;
           }
-          v.defaultPlaybackRate = safeRate;
+          if (nativeSetDefaultPlaybackRate) {
+            nativeSetDefaultPlaybackRate.call(v, safeRate);
+          } else {
+            v.defaultPlaybackRate = safeRate;
+          }
           if (v.player && typeof v.player.playbackRate === 'function') {
             v.player.playbackRate(safeRate);
           }
@@ -175,6 +250,7 @@
     const desired = getDesiredSpeed();
     if (desired !== null && e.target && e.target.tagName === 'VIDEO' && !isWritingSpeed) {
       const v = e.target;
+      protectVideoElement(v);
       if (Math.abs(v.playbackRate - desired) > 0.05) {
         isWritingSpeed = true;
         try {
@@ -192,7 +268,7 @@
   }, true);
 
   // Re-assert desired speed on lifecycle media events
-  ['play', 'loadedmetadata', 'canplay', 'loadstart', 'timeupdate'].forEach((evtName) => {
+  ['play', 'loadedmetadata', 'canplay', 'loadstart', 'timeupdate', 'seeking', 'seeked'].forEach((evtName) => {
     document.addEventListener(evtName, (e) => {
       const desired = getDesiredSpeed();
       if (desired !== null && e.target && e.target.tagName === 'VIDEO' && !isWritingSpeed) {
@@ -214,4 +290,28 @@
       }
     }, true);
   });
+
+  // Watchdog timer (every 150ms) to counteract aggressive timers or players resetting to 2.0x
+  setInterval(() => {
+    const desired = getDesiredSpeed();
+    if (desired !== null && !isWritingSpeed) {
+      const videos = findAllVideos(document);
+      for (let i = 0; i < videos.length; i++) {
+        const v = videos[i];
+        if (Math.abs(v.playbackRate - desired) > 0.05) {
+          isWritingSpeed = true;
+          try {
+            if (nativeSetPlaybackRate) {
+              nativeSetPlaybackRate.call(v, desired);
+            } else {
+              v.playbackRate = desired;
+            }
+          } catch (e) {}
+          finally {
+            isWritingSpeed = false;
+          }
+        }
+      }
+    }
+  }, 150);
 })();

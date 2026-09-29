@@ -58,6 +58,16 @@ document.addEventListener('DOMContentLoaded', () => {
       updateSpeedUi(speed);
       chrome.storage.local.set({ linkedInPlaybackRate: speed });
       addLog(`⚡ Speed set to ${speed}x`, 'info');
+
+      // Send immediate direct message to active tab for zero-latency response
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (tabs && tabs[0]?.id) {
+          chrome.tabs.sendMessage(tabs[0].id, {
+            action: 'SET_LINKEDIN_SPEED',
+            speed: speed
+          }).catch(() => {});
+        }
+      });
     });
   });
 

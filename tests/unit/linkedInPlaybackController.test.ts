@@ -5,16 +5,30 @@ class MockVideoElement extends EventTarget {
   public muted: boolean = false;
   public defaultMuted: boolean = false;
   public volume: number = 1.0;
-  public playbackRate: number = 1.0;
+  private _playbackRate: number = 1.0;
   public currentTime: number = 0;
   public duration: number = 100;
   public paused: boolean = true;
   public ended: boolean = false;
+  public emulateChromiumLimit: boolean = true;
 
   public currentTimeAssignments: number[] = [];
 
   constructor() {
     super();
+  }
+
+  get playbackRate(): number {
+    return this._playbackRate;
+  }
+
+  set playbackRate(val: number) {
+    if (this.emulateChromiumLimit && val > 16.0) {
+      const err = new Error("Failed to set 'playbackRate': The provided playback rate is not supported.");
+      err.name = 'NotSupportedError';
+      throw err;
+    }
+    this._playbackRate = val;
   }
 
   public play(): Promise<void> {
@@ -55,8 +69,9 @@ class LinkedInPlaybackController {
   public lastRestoreTime: number = 0;
   public restoreCooldownMs: number = 300;
   public advanceCallback?: () => void;
+  public _isSettingSpeed: boolean = false;
 
-  private _onRateChange: () => void;
+  private _onRateChange: (e?: any) => void;
   private _onEnded: () => void;
   private _onTimeUpdate: () => void;
   private _onPlay: () => void;
@@ -80,7 +95,7 @@ class LinkedInPlaybackController {
     if (this.initialized) return;
     this.initialized = true;
 
-    this.video.addEventListener('ratechange', this._onRateChange);
+    this.video.addEventListener('ratechange', this._onRateChange, true as any);
     this.video.addEventListener('ended', this._onEnded);
     this.video.addEventListener('timeupdate', this._onTimeUpdate);
     this.video.addEventListener('play', this._onPlay);
@@ -90,8 +105,7 @@ class LinkedInPlaybackController {
     this.video.defaultMuted = true;
     this.video.volume = 0;
 
-    this.video.playbackRate = this.requestedRate;
-    this.effectiveRate = this.video.playbackRate;
+    this.applySpeed();
 
     if (this.video.paused) {
       this.video.play().then(() => {
@@ -102,22 +116,44 @@ class LinkedInPlaybackController {
     }
   }
 
-  public setSpeed(newRate: number): void {
-    this.requestedRate = Number(newRate) || 100;
-    this.video.playbackRate = this.requestedRate;
+  public applySpeed(): void {
+    this._isSettingSpeed = true;
+    let targetRate = this.requestedRate;
+
+    try {
+      this.video.playbackRate = targetRate;
+    } catch (err) {
+      targetRate = Math.min(16.0, Math.max(0.0625, targetRate));
+      try {
+        this.video.playbackRate = targetRate;
+      } catch (err2) {}
+    }
+
     this.effectiveRate = this.video.playbackRate;
+    this._isSettingSpeed = false;
   }
 
-  public handleRateChange(): void {
+  public setSpeed(newRate: number): void {
+    this.requestedRate = Number(newRate) || 100;
+    this.applySpeed();
+  }
+
+  public handleRateChange(e?: any): void {
     if (!this.initialized || this.completed) return;
+
+    if (this._isSettingSpeed) {
+      e?.stopImmediatePropagation?.();
+      return;
+    }
+
     const currentRate = this.video.playbackRate;
 
     if (Math.abs(currentRate - this.effectiveRate) > 0.05) {
+      e?.stopImmediatePropagation?.();
       const now = Date.now();
       if (now - this.lastRestoreTime > this.restoreCooldownMs) {
         this.lastRestoreTime = now;
-        this.video.playbackRate = this.requestedRate;
-        this.effectiveRate = this.video.playbackRate;
+        this.applySpeed();
       }
     }
   }
@@ -152,7 +188,7 @@ class LinkedInPlaybackController {
   public destroy(): void {
     this.initialized = false;
     this.playing = false;
-    this.video.removeEventListener('ratechange', this._onRateChange);
+    this.video.removeEventListener('ratechange', this._onRateChange, true as any);
     this.video.removeEventListener('ended', this._onEnded);
     this.video.removeEventListener('timeupdate', this._onTimeUpdate);
     this.video.removeEventListener('play', this._onPlay);
@@ -167,16 +203,26 @@ describe('LinkedInPlaybackController (Video Speed Controller Architecture)', () 
     video = new MockVideoElement();
   });
 
-  const testSpeeds = [16, 50, 100, 150, 200];
+  const testSpeeds = [
+    { req: 1, expected: 1 },
+    { req: 2, expected: 2 },
+    { req: 4, expected: 4 },
+    { req: 8, expected: 8 },
+    { req: 16, expected: 16 },
+    { req: 50, expected: 16 }, // Clamped to Chromium's native 16x limit
+    { req: 100, expected: 16 },
+    { req: 150, expected: 16 },
+    { req: 200, expected: 16 },
+  ];
 
-  testSpeeds.forEach(speed => {
-    it(`should initialize with requested speed ${speed}x, mute, and start playback automatically`, async () => {
-      const controller = new LinkedInPlaybackController(video, speed);
+  testSpeeds.forEach(({ req, expected }) => {
+    it(`should initialize with requested speed ${req}x and achieve effective rate ${expected}x`, async () => {
+      const controller = new LinkedInPlaybackController(video, req);
 
       expect(controller.initialized).toBe(true);
       expect(video.muted).toBe(true);
-      expect(video.playbackRate).toBe(speed);
-      expect(controller.effectiveRate).toBe(speed);
+      expect(video.playbackRate).toBe(expected);
+      expect(controller.effectiveRate).toBe(expected);
       expect(video.paused).toBe(false);
 
       // Verify zero seek manipulation (currentTime never written by controller)
@@ -202,16 +248,16 @@ describe('LinkedInPlaybackController (Video Speed Controller Architecture)', () 
   });
 
   it('should handle rate fightback by restoring rate with cooldown', () => {
-    const controller = new LinkedInPlaybackController(video, 100);
-    expect(video.playbackRate).toBe(100);
+    const controller = new LinkedInPlaybackController(video, 16);
+    expect(video.playbackRate).toBe(16);
 
     // Simulate LinkedIn resetting rate to 1.0
     video.playbackRate = 1.0;
     video.dispatchEvent(new Event('ratechange'));
 
-    // Should immediately restore to 100
-    expect(video.playbackRate).toBe(100);
-    expect(controller.effectiveRate).toBe(100);
+    // Should immediately restore to 16
+    expect(video.playbackRate).toBe(16);
+    expect(controller.effectiveRate).toBe(16);
 
     controller.destroy();
   });

@@ -99,6 +99,16 @@ export const LINKEDIN_SELECTORS = {
   ],
 
   nextButton: [
+    'button[aria-label="Next" i]',
+    'button[aria-label*="Next" i]',
+    'button[aria-label*="Next video" i]',
+    'button[aria-label*="Next lesson" i]',
+    'button[aria-label*="Next item" i]',
+    'button[data-tracking-control-name*="next" i]',
+    'button.classroom-nav__direction-button--next',
+    'button.classroom-nav__next-button',
+    'button.classroom-nav__button--next',
+    'button.classroom-control-bar__next-btn',
     'button[data-test-classroom-nav-next-button]',
     '.classroom-nav button[aria-label="Next item" i]',
     '.classroom-nav button[aria-label="Next lesson" i]',
@@ -107,12 +117,11 @@ export const LINKEDIN_SELECTORS = {
     '.classroom-nav button[aria-label="Next chapter" i]',
     '.classroom-nav button[aria-label*="Next" i]',
     '.classroom-player-controls button[aria-label*="Next" i]',
-    'button.classroom-nav__next-button',
-    'button.classroom-nav__button--next',
     'button[data-control-name="next_item"]',
     'button[data-control-name="next_chapter"]',
     'button[data-control-name="next_section"]',
-    '.vjs-next-button'
+    '.vjs-next-button',
+    'a[aria-label*="Next" i]'
   ],
 
   nextUpBanner: [

@@ -119,13 +119,25 @@ export class NextLessonController {
           }
         });
 
-        if (lessonAnchors.length === 0) {
+        const seenPaths = new Set<string>();
+        const uniqueLessonAnchors: HTMLAnchorElement[] = [];
+        for (const a of lessonAnchors) {
+          try {
+            const aPath = (a.href.startsWith('http') ? new URL(a.href).pathname : a.href).replace(/\/$/, '');
+            if (!seenPaths.has(aPath)) {
+              seenPaths.add(aPath);
+              uniqueLessonAnchors.push(a);
+            }
+          } catch {}
+        }
+
+        if (uniqueLessonAnchors.length === 0) {
           return { found: false, isCourseComplete: false, nextHref: null, nextTitle: null };
         }
 
         const currentPath = window.location.pathname.replace(/\/$/, '');
         
-        let currentIdx = lessonAnchors.findIndex(a => {
+        let currentIdx = uniqueLessonAnchors.findIndex(a => {
           try {
             const aPath = (a.href.startsWith('http') ? new URL(a.href).pathname : a.href).replace(/\/$/, '');
             return aPath === currentPath;
@@ -135,20 +147,20 @@ export class NextLessonController {
         });
 
         if (currentIdx === -1) {
-          currentIdx = lessonAnchors.findIndex(a => {
+          currentIdx = uniqueLessonAnchors.findIndex(a => {
             const activeParent = a.closest('.classroom-toc-item--active, .classroom-sidebar__item--active, [data-test-toc-item-active], .rc-LessonItems a.active, a[aria-current="page"]');
             return activeParent !== null || a.classList.contains('active') || a.getAttribute('aria-current') === 'page' || a.getAttribute('aria-current') === 'true';
           });
         }
 
         // If currently on the final lesson of the course
-        if (currentIdx >= 0 && currentIdx === lessonAnchors.length - 1) {
+        if (currentIdx >= 0 && currentIdx === uniqueLessonAnchors.length - 1) {
           return { found: true, isCourseComplete: true, nextHref: null, nextTitle: null };
         }
 
         const nextIdx = currentIdx >= 0 ? currentIdx + 1 : 1;
-        if (nextIdx < lessonAnchors.length) {
-          const target = lessonAnchors[nextIdx];
+        if (nextIdx < uniqueLessonAnchors.length) {
+          const target = uniqueLessonAnchors[nextIdx];
           const nextHref = target.href;
           const nextTitle = (target.innerText || '').trim().split('\n')[0];
 

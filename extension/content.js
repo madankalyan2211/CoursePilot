@@ -632,7 +632,12 @@
         }
 
         if (linkedInState.advancing) {
-          return;
+          if (Date.now() - lastAdvanceTime > 2500) {
+            console.log('[CoursePilot][LinkedIn] Advance attempt timeout — unlocking to retry...');
+            linkedInState.advancing = false;
+          } else {
+            return;
+          }
         }
 
         // Step A: Start native accelerated playback (idempotent, once per video)
@@ -773,17 +778,119 @@
     }
   }
 
+  function simulateClick(el) {
+    if (!el) return;
+    try {
+      el.scrollIntoView?.({ block: 'nearest' });
+    } catch (e) {}
+
+    const mouseEvents = ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'];
+    for (const evtName of mouseEvents) {
+      try {
+        el.dispatchEvent(new MouseEvent(evtName, { bubbles: true, cancelable: true, view: window }));
+      } catch (e) {}
+    }
+
+    try {
+      el.click();
+    } catch (e) {}
+  }
+
+  function armDirectNavigationFallback(targetHref) {
+    if (!targetHref) return;
+    const initialPath = window.location.pathname;
+    setTimeout(() => {
+      if (window.location.pathname === initialPath) {
+        console.log('[CoursePilot] Navigation click did not change URL. Hard navigating to:', targetHref);
+        window.location.href = targetHref;
+      }
+    }, 1200);
+  }
+
+  function getLinkedInCourseLessons() {
+    const currentPath = window.location.pathname.replace(/\/$/, '');
+    const pathParts = currentPath.split('/').filter(Boolean);
+    const courseSlug = (pathParts[0] === 'learning' && pathParts[1]) ? pathParts[1] : '';
+
+    const sidebar = document.querySelector('.classroom-sidebar, .classroom-toc, [data-test-classroom-sidebar]') || document.body;
+    const allAnchors = Array.from(sidebar.querySelectorAll('a[href*="/learning/"]'));
+
+    const uniqueLessons = [];
+    const seenPaths = new Set();
+
+    for (const a of allAnchors) {
+      try {
+        const u = new URL(a.href, window.location.origin);
+        const p = u.pathname.replace(/\/$/, '');
+        const parts = p.split('/').filter(Boolean);
+
+        if (parts.length >= 3 && parts[0] === 'learning') {
+          if (!courseSlug || parts[1] === courseSlug) {
+            const lessonSlug = parts[2];
+            if (!['me', 'topics', 'browse', 'certificates', 'search'].includes(lessonSlug)) {
+              if (!seenPaths.has(p)) {
+                seenPaths.add(p);
+                uniqueLessons.push({
+                  path: p,
+                  href: a.href,
+                  element: a,
+                  title: (a.textContent || a.getAttribute('aria-label') || '').trim().split('\n')[0]
+                });
+              }
+            }
+          }
+        }
+      } catch (e) {}
+    }
+
+    return uniqueLessons;
+  }
+
   function advanceToNextTopic() {
     advanceAttemptCount++;
     lastAdvanceTime = Date.now();
     logToPopup('Advancing to next topic video...', 'info');
 
+    // 0. On LinkedIn Learning: expand collapsed accordion sections and compute target
+    let linkedInNextTarget = null;
+    if (isLinkedIn) {
+      const toggles = document.querySelectorAll(
+        'button[aria-expanded="false"], .classroom-toc-section__toggle[aria-expanded="false"], [data-test-toc-section-header] button'
+      );
+      toggles.forEach(btn => {
+        try { btn.click(); } catch (e) {}
+      });
+
+      const lessons = getLinkedInCourseLessons();
+      const currentPath = window.location.pathname.replace(/\/$/, '');
+      let currentIdx = lessons.findIndex(item => item.path === currentPath);
+      if (currentIdx === -1) {
+        const activeItem = getActiveLinkedInTocItem();
+        if (activeItem) {
+          currentIdx = lessons.findIndex(item => activeItem.contains(item.element));
+        }
+      }
+
+      if (currentIdx >= 0) {
+        if (currentIdx === lessons.length - 1) {
+          logToPopup('🎉 Course completed! Reached the final lesson.', 'success');
+          linkedInState.advancing = false;
+          return;
+        }
+        linkedInNextTarget = lessons[currentIdx + 1];
+      } else if (lessons.length > 0) {
+        linkedInNextTarget = lessons[0];
+      }
+    }
+
     // Strategy 1: Autoplay banner or toast prompt (OFFICIAL platform completion trigger)
     const autoplaySelectors = [
       'button[data-test-autoplay-next-button]',
-      '.next-item-banner button',
+      'button[data-test-classroom-toast-button]',
       '.classroom-player-toast button',
+      '.next-item-banner button',
       '[data-test-autoplay-container] button',
+      'button[data-tracking-control-name*="autoplay"]',
       'button[data-e2e="next-item-banner-button"]',
       '.rc-NextItemToast button',
       '.rc-AutoplayToast button',
@@ -794,7 +901,11 @@
       const bannerBtns = document.querySelectorAll(sel);
       for (const bannerBtn of bannerBtns) {
         if (bannerBtn && !bannerBtn.hasAttribute('disabled')) {
-          bannerBtn.click();
+          logToPopup('Advancing via autoplay banner...', 'info');
+          simulateClick(bannerBtn);
+          if (linkedInNextTarget?.href) {
+            armDirectNavigationFallback(linkedInNextTarget.href);
+          }
           return;
         }
       }
@@ -826,17 +937,24 @@
       '.rc-NextItemButton button',
       '.rc-NextItemButton a'
     ] : [
+      'button[aria-label="Next" i]',
+      'button[aria-label*="Next" i]',
+      'button[aria-label*="Next video" i]',
+      'button[aria-label*="Next lesson" i]',
+      'button[aria-label*="Next item" i]',
+      'button[data-tracking-control-name*="next" i]',
+      'button.classroom-nav__direction-button--next',
+      'button.classroom-nav__next-button',
+      'button.classroom-nav__button--next',
+      'button.classroom-control-bar__next-btn',
       'button[data-test-classroom-nav-next-button]',
-      '.classroom-nav button[aria-label="Next item" i]',
-      '.classroom-nav button[aria-label="Next lesson" i]',
-      '.classroom-nav button[aria-label="Next video" i]',
       '.classroom-nav button[aria-label*="Next" i]',
       '.classroom-player-controls button[aria-label*="Next" i]',
-      'button.classroom-nav__next-button',
       'button[data-control-name="next_item"]',
       'button[data-control-name="next_chapter"]',
       'button[data-control-name="next_section"]',
-      '.vjs-next-button'
+      '.vjs-next-button',
+      'a[aria-label*="Next" i]'
     ]);
 
     for (const sel of nextButtonSelectors) {
@@ -846,8 +964,11 @@
           const isEnabled = !nextBtn.hasAttribute('disabled') && nextBtn.getAttribute('aria-disabled') !== 'true';
           const isVisible = nextBtn.offsetWidth > 0 || nextBtn.offsetHeight > 0 || nextBtn.offsetParent !== null;
           if (isEnabled && isVisible) {
-            nextBtn.scrollIntoView?.({ block: 'nearest' });
-            nextBtn.click();
+            logToPopup('Advancing to next lesson...', 'info');
+            simulateClick(nextBtn);
+            if (linkedInNextTarget?.href) {
+              armDirectNavigationFallback(linkedInNextTarget.href);
+            }
             return;
           }
         }
@@ -878,8 +999,7 @@
 
       if (currentIdx >= 0 && currentIdx + 1 < lessonLinks.length) {
         const nextAnchor = lessonLinks[currentIdx + 1];
-        nextAnchor.scrollIntoView?.({ block: 'nearest' });
-        nextAnchor.click();
+        simulateClick(nextAnchor);
         return;
       }
     } else if (isLnt) {
@@ -889,30 +1009,19 @@
       const currentIdx = allLinks.findIndex(el => (el.href && el.href === currentHref) || el.classList.contains('active'));
       if (currentIdx >= 0 && currentIdx + 1 < allLinks.length) {
         const nextEl = allLinks[currentIdx + 1];
-        nextEl.scrollIntoView?.({ block: 'nearest' });
-        nextEl.click();
+        simulateClick(nextEl);
         return;
       }
     } else {
       // LinkedIn Learning TOC Items
-      const sidebar = document.querySelector('.classroom-sidebar, .classroom-toc, [data-test-classroom-sidebar]') || document.body;
-      const allLinks = Array.from(sidebar.querySelectorAll('a[href*="/learning/"]'));
-      const currentPath = window.location.pathname.replace(/\/$/, '');
-
-      const lessonLinks = allLinks.filter(a => {
-        const p = (a.pathname || '').replace(/\/$/, '');
-        return p.includes('/learning/') && !p.includes('/me') && !p.includes('/topics');
-      });
-
-      const currentIdx = lessonLinks.findIndex(a => {
-        const p = (a.pathname || '').replace(/\/$/, '');
-        return p === currentPath || a.closest('.classroom-toc-item--active') || a.closest('[data-test-toc-item-active]');
-      });
-
-      if (currentIdx >= 0 && currentIdx + 1 < lessonLinks.length) {
-        const nextAnchor = lessonLinks[currentIdx + 1];
-        nextAnchor.scrollIntoView?.({ block: 'nearest' });
-        nextAnchor.click();
+      if (linkedInNextTarget && linkedInNextTarget.href) {
+        logToPopup(`Advancing to: ${linkedInNextTarget.title || 'Next lesson'}...`, 'info');
+        simulateClick(linkedInNextTarget.element);
+        const parentBtn = linkedInNextTarget.element.closest('button, li, [role="button"]');
+        if (parentBtn && parentBtn !== linkedInNextTarget.element) {
+          simulateClick(parentBtn);
+        }
+        armDirectNavigationFallback(linkedInNextTarget.href);
         return;
       }
     }

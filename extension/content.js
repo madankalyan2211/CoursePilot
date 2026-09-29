@@ -588,7 +588,7 @@
       this.playing = false;
       this.completed = false;
       this.advancing = false;
-      this.lastRestoreTime = 0;
+      this.lastRestoreTime = -999999;
       this.restoreCooldownMs = 250;
 
       // Bound event listeners

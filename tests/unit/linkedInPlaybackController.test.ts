@@ -115,7 +115,7 @@ class LinkedInPlaybackController {
   public playing: boolean = false;
   public completed: boolean = false;
   public advancing: boolean = false;
-  public lastRestoreTime: number = 0;
+  public lastRestoreTime: number = -999999;
   public restoreCooldownMs: number = 250;
   public advanceCallback?: () => void;
 

@@ -637,7 +637,7 @@
       this.completed = false;
       this.advancing = false;
       this.lastRestoreTime = -999999;
-      this.restoreCooldownMs = 250;
+      this.restoreCooldownMs = 50;
 
       // Bound event listeners
       this._onRateChange = this.handleRateChange.bind(this);
@@ -895,6 +895,11 @@
     const targetRate = Number(speed) || linkedInPlaybackRate || 100;
     const safeRate = Math.min(16.0, Math.max(0.0625, targetRate));
     linkedInPlaybackRate = targetRate;
+
+    try {
+      document.documentElement?.setAttribute('data-coursepilot-speed', String(safeRate));
+      window.postMessage({ type: '__coursepilot_set_speed', speed: safeRate }, '*');
+    } catch (e) {}
 
     const videos = findAllVideos(document);
     videos.forEach((v) => {

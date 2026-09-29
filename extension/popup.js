@@ -72,8 +72,12 @@ document.addEventListener('DOMContentLoaded', () => {
             } catch (e) {}
             return list;
           }
-          const safeRate = Math.min(16.0, Math.max(0.0625, rate));
+          const safeRate = Math.min(16.0, Math.max(0.0625, Number(rate) || 1.0));
           window.__coursepilot_desired_speed = safeRate;
+          try {
+            document.documentElement?.setAttribute('data-coursepilot-speed', String(safeRate));
+            window.postMessage({ type: '__coursepilot_set_speed', speed: safeRate }, '*');
+          } catch (e) {}
           findVideos(document).forEach((v) => {
             try {
               v.playbackRate = safeRate;
@@ -83,8 +87,6 @@ document.addEventListener('DOMContentLoaded', () => {
               }
             } catch (e) {}
           });
-          window.dispatchEvent(new CustomEvent('__coursepilot_set_speed', { detail: { speed: rate } }));
-          document.dispatchEvent(new CustomEvent('__coursepilot_set_speed', { detail: { speed: rate } }));
         },
         args: [speed]
       }).catch(() => {});
@@ -104,15 +106,17 @@ document.addEventListener('DOMContentLoaded', () => {
             } catch (e) {}
             return list;
           }
-          const safeRate = Math.min(16.0, Math.max(0.0625, rate));
+          const safeRate = Math.min(16.0, Math.max(0.0625, Number(rate) || 1.0));
+          try {
+            document.documentElement?.setAttribute('data-coursepilot-speed', String(safeRate));
+            window.postMessage({ type: '__coursepilot_set_speed', speed: safeRate }, '*');
+          } catch (e) {}
           findVideos(document).forEach((v) => {
             try {
               v.playbackRate = safeRate;
               v.defaultPlaybackRate = safeRate;
             } catch (e) {}
           });
-          window.dispatchEvent(new CustomEvent('__coursepilot_set_speed', { detail: { speed: rate } }));
-          document.dispatchEvent(new CustomEvent('__coursepilot_set_speed', { detail: { speed: rate } }));
         },
         args: [speed]
       }).catch(() => {});

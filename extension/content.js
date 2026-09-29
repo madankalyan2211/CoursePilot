@@ -92,6 +92,10 @@
     activeVideoKey = null;
     hasSeekedCurrentVideo = false;
     resetLinkedInState();
+    const video = findActiveVideoElement();
+    if (video) {
+      try { video.playbackRate = 1.0; } catch (e) {}
+    }
     chrome.storage.local.set({ isRunning: false, isPausedForUser: false });
     syncStateToStorage();
     removeFloatingOverlay();
@@ -559,44 +563,22 @@
 
   /**
    * LinkedIn Accelerated Playback
-   * Controls DOM video directly and coordinates with main-world injected.js
-   * for Video.js configuration, speed-locking, and lowest-bitrate (360p) streaming.
-   * Completely CSP-compliant: zero inline script tags.
+   * Sets video playbackRate cleanly on HTML5 media elements.
+   * Completely CSP-compliant: zero inline script tags, zero monkey-patching of Video.js.
    */
   function applyLinkedInNativePlayback(rate = 4.0) {
     const safeRate = Math.min(16.0, Math.max(0.5, Number(rate) || 4.0));
     ensureMainWorldBridge();
 
-    // 1. Direct DOM manipulation in content script context
     const vids = document.querySelectorAll('video');
     vids.forEach(v => {
       if (!v) return;
-      v.muted = true;
-      v.defaultMuted = true;
-      try { v.volume = 0; } catch(e) {}
       if (Math.abs(v.playbackRate - safeRate) > 0.05) {
         try {
-          const setter = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'playbackRate')?.set;
-          if (setter) {
-            setter.call(v, safeRate);
-          } else {
-            v.playbackRate = safeRate;
-          }
-        } catch (e) {
-          try { v.playbackRate = safeRate; } catch(e2) {}
-        }
-      }
-      if (v.paused && v.duration > 0) {
-        v.play().catch(() => {});
+          v.playbackRate = safeRate;
+        } catch (e) {}
       }
     });
-
-    // 2. Message main-world script to unlock Video.js and lock target rate
-    window.postMessage({
-      source: 'coursepilot_extension',
-      action: 'APPLY_PLAYBACK_RATE',
-      rate: safeRate
-    }, '*');
   }
 
   /**
@@ -715,50 +697,13 @@
         }
 
         // Step B: Maintain genuine playback during watchdog ticks
-        if (video.paused && !video.ended && !linkedInState.completionDetected) {
-          video.play().catch(() => {});
-        }
-        if (!video.muted) {
-          video.muted = true;
-          video.defaultMuted = true;
-        }
-
-        // Active Stall Detector: detect if playhead is stuck loading
-        const currentPos = video.currentTime;
-        if (linkedInState.lastPlayheadPos === undefined) {
-          linkedInState.lastPlayheadPos = currentPos;
-          linkedInState.lastPlayheadCheck = Date.now();
-          linkedInState.stallTicks = 0;
-        } else {
-          const elapsed = Date.now() - (linkedInState.lastPlayheadCheck || Date.now());
-          if (elapsed >= 800) {
-            const progress = currentPos - linkedInState.lastPlayheadPos;
-            linkedInState.lastPlayheadPos = currentPos;
-            linkedInState.lastPlayheadCheck = Date.now();
-
-            if (progress < 0.05 && !video.paused && !video.ended && !linkedInState.completionDetected) {
-              linkedInState.stallTicks = (linkedInState.stallTicks || 0) + 1;
-              if (linkedInState.stallTicks >= 2) {
-                // Video has been stuck buffering for 1.6s — nudge playhead forward to clear pipeline stall
-                console.log('[CoursePilot][LinkedIn] Playhead stall detected — nudging video pipeline...');
-                if (duration > 0 && currentPos + 0.25 < duration) {
-                  video.currentTime = currentPos + 0.2;
-                }
-                video.play().catch(() => {});
-                linkedInState.stallTicks = 0;
-              }
-            } else {
-              linkedInState.stallTicks = 0;
-            }
-          }
-        }
-
-        // Only enforce accelerated rate when video has sufficient buffer data (readyState >= 3)
-        // If readyState < 3 (buffering), let browser buffer fill up before accelerating
         const effectiveRate = Math.min(16.0, Math.max(0.5, linkedInPlaybackRate));
-        if (video.readyState >= 3 && Math.abs(video.playbackRate - effectiveRate) > 0.05) {
+        if (video.readyState >= 2 && Math.abs(video.playbackRate - effectiveRate) > 0.05) {
           try { video.playbackRate = effectiveRate; } catch (e) {}
-          applyLinkedInNativePlayback(effectiveRate);
+        }
+
+        if (video.paused && !video.ended && !linkedInState.completionDetected && video.readyState >= 2) {
+          video.play().catch(() => {});
         }
 
         // Step C: Monitor genuine watched time

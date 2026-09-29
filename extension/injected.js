@@ -15,6 +15,7 @@
   } catch(e) {}
 
   let currentTargetRate = 4.0;
+  let isInternalRateChange = false;
 
   // 1. Diagnostic Network Observer (read-only)
   function checkGraphQLBody(url, body) {
@@ -71,101 +72,96 @@
     currentTargetRate = safeRate;
     window.__coursepilot_target_rate = safeRate;
 
-    // A. Configure Video.js player instances
-    if (window.videojs) {
-      try {
-        const players = window.videojs.getPlayers ? window.videojs.getPlayers() : window.videojs.players;
-        if (players) {
-          for (const key in players) {
-            const p = players[key];
-            if (p) {
-              try { p.muted(true); } catch(e) {}
-              try { p.volume(0); } catch(e) {}
-
-              if (p.options_) {
-                p.options_.playbackRates = [0.5, 1, 2, 4, 6, 8, 12, 16];
-              }
-              if (typeof p.playbackRates === 'function') {
-                try { p.playbackRates([0.5, 1, 2, 4, 6, 8, 12, 16]); } catch(e) {}
-              }
-              if (typeof p.playbackRate === 'function') {
-                try { p.playbackRate(safeRate); } catch(e) {}
-              }
-              if (p.tech_ && typeof p.tech_.setPlaybackRate === 'function') {
-                try { p.tech_.setPlaybackRate(safeRate); } catch(e) {}
-              }
-
-              // Force 360p lowest video quality to prevent network buffer exhaustion at 16x
-              if (p.qualityLevels) {
-                try {
-                  const ql = p.qualityLevels();
-                  if (ql && ql.length > 0) {
-                    for (let i = 0; i < ql.length; i++) {
-                      ql[i].enabled = (i === 0);
-                    }
-                  }
-                } catch(e) {}
-              }
-
-              if (typeof p.play === 'function') {
-                try { p.play(); } catch(e) {}
-              }
-            }
-          }
-        }
-      } catch(e) {}
-    }
-
-    // B. Configure native HTML5 video elements
+    isInternalRateChange = true;
     try {
-      const vids = document.querySelectorAll('video');
-      vids.forEach(v => {
-        if (!v) return;
-        v.muted = true;
-        v.defaultMuted = true;
-        try { v.volume = 0; } catch(e) {}
-
-        // Disable audio tracks to prevent Chromium AudioRenderer throttling
+      // A. Configure Video.js player instances
+      if (window.videojs) {
         try {
-          if (v.audioTracks) {
-            for (let i = 0; i < v.audioTracks.length; i++) {
-              v.audioTracks[i].enabled = false;
+          const players = window.videojs.getPlayers ? window.videojs.getPlayers() : window.videojs.players;
+          if (players) {
+            for (const key in players) {
+              const p = players[key];
+              if (p) {
+                try { p.muted(true); } catch(e) {}
+                try { p.volume(0); } catch(e) {}
+
+                if (p.options_ && !p._coursepilot_configured) {
+                  p._coursepilot_configured = true;
+                  p.options_.playbackRates = [0.5, 1, 2, 4, 6, 8, 12, 16];
+                }
+                if (typeof p.playbackRates === 'function' && !p._coursepilot_rates_set) {
+                  p._coursepilot_rates_set = true;
+                  try { p.playbackRates([0.5, 1, 2, 4, 6, 8, 12, 16]); } catch(e) {}
+                }
+                if (typeof p.playbackRate === 'function') {
+                  try {
+                    if (Math.abs(p.playbackRate() - safeRate) > 0.05) {
+                      p.playbackRate(safeRate);
+                    }
+                  } catch(e) {}
+                }
+                if (p.tech_ && typeof p.tech_.setPlaybackRate === 'function') {
+                  try { p.tech_.setPlaybackRate(safeRate); } catch(e) {}
+                }
+
+                if (typeof p.play === 'function') {
+                  try { p.play(); } catch(e) {}
+                }
+              }
             }
           }
         } catch(e) {}
+      }
 
-        // Invoke native setter
-        try {
-          const setter = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'playbackRate')?.set;
-          if (setter) {
-            setter.call(v, safeRate);
-          } else {
-            v.playbackRate = safeRate;
-          }
-        } catch(e) {
-          try { v.playbackRate = safeRate; } catch(e2) {}
-        }
+      // B. Configure native HTML5 video elements
+      try {
+        const vids = document.querySelectorAll('video');
+        vids.forEach(v => {
+          if (!v) return;
+          v.muted = true;
+          v.defaultMuted = true;
+          try { v.volume = 0; } catch(e) {}
 
-        // Lock speed against LinkedIn reset attempts
-        if (!v._coursepilot_rate_locked) {
-          v._coursepilot_rate_locked = true;
-          v.addEventListener('ratechange', function() {
-            const desired = window.__coursepilot_target_rate || currentTargetRate;
-            if (Math.abs(v.playbackRate - desired) > 0.05 && desired <= 16.0) {
-              try {
-                const s = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'playbackRate')?.set;
-                if (s) s.call(v, desired);
-                else v.playbackRate = desired;
-              } catch(e) {}
+          // Apply target rate if different
+          if (Math.abs(v.playbackRate - safeRate) > 0.05) {
+            try {
+              const setter = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'playbackRate')?.set;
+              if (setter) {
+                setter.call(v, safeRate);
+              } else {
+                v.playbackRate = safeRate;
+              }
+            } catch(e) {
+              try { v.playbackRate = safeRate; } catch(e2) {}
             }
-          }, true);
-        }
+          }
 
-        if (v.paused && v.duration > 0) {
-          v.play().catch(() => {});
-        }
-      });
-    } catch(e) {}
+          // Lock speed against LinkedIn internal resets without infinite loops
+          if (!v._coursepilot_rate_locked) {
+            v._coursepilot_rate_locked = true;
+            v.addEventListener('ratechange', function() {
+              if (isInternalRateChange) return;
+              const desired = window.__coursepilot_target_rate || currentTargetRate;
+              if (desired && Math.abs(v.playbackRate - desired) > 0.1 && desired <= 16.0) {
+                isInternalRateChange = true;
+                try {
+                  const s = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'playbackRate')?.set;
+                  if (s) s.call(v, desired);
+                  else v.playbackRate = desired;
+                } catch(e) {}
+                setTimeout(() => { isInternalRateChange = false; }, 60);
+              }
+            }, true);
+          }
+
+          if (v.paused && v.duration > 0) {
+            v.play().catch(() => {});
+          }
+        });
+      } catch(e) {}
+    } finally {
+      setTimeout(() => { isInternalRateChange = false; }, 60);
+    }
   }
 
   // 3. Listen for commands from isolated-world content.js
@@ -175,14 +171,4 @@
       applyTargetPlaybackRate(event.data.rate);
     }
   });
-
-  // Watch for dynamically added <video> tags
-  const observer = new MutationObserver(() => {
-    if (window.__coursepilot_target_rate && window.__coursepilot_target_rate > 1) {
-      applyTargetPlaybackRate(window.__coursepilot_target_rate);
-    }
-  });
-  if (document.documentElement) {
-    observer.observe(document.documentElement, { childList: true, subtree: true });
-  }
 })();

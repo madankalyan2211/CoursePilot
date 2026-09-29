@@ -195,6 +195,78 @@ body {
   text-overflow: ellipsis;
 }
 
+/* Playback Speed Control */
+.speed-control-card {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.speed-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.speed-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: #98989d;
+  letter-spacing: 0.04em;
+}
+
+.speed-current {
+  font-size: 11px;
+  font-weight: 700;
+  color: #0a84ff;
+  background: rgba(10, 132, 255, 0.15);
+  padding: 2px 7px;
+  border-radius: 99px;
+  border: 1px solid rgba(10, 132, 255, 0.3);
+}
+
+.speed-selector-group {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 4px;
+  background: rgba(0, 0, 0, 0.3);
+  padding: 3px;
+  border-radius: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.speed-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 6px 0;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+  font-family: inherit;
+  text-align: center;
+}
+
+.speed-btn:hover {
+  background: rgba(255, 255, 255, 0.09);
+  color: #ffffff;
+}
+
+.speed-btn.active {
+  background: linear-gradient(135deg, #0a84ff, #0066cc);
+  color: #ffffff;
+  font-weight: 700;
+  box-shadow: 0 2px 8px rgba(10, 132, 255, 0.4);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
 /* Buttons */
 .actions {
   display: flex;

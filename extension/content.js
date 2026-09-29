@@ -21,12 +21,47 @@
 
   const isCoursera = window.location.hostname.includes('coursera.org');
   const isLnt = window.location.hostname.includes('lntedutech.com');
+  const isLinkedIn = !isCoursera && !isLnt && window.location.hostname.includes('linkedin.com');
   const platformName = isLnt ? 'L&T EduTech' : (isCoursera ? 'Coursera' : 'LinkedIn Learning');
 
+  // Configurable LinkedIn Learning settings
+  const LINKEDIN_PLAYBACK_RATE_DEFAULT = 4.0;
+  const LINKEDIN_COMPLETION_TARGET = 0.72; // Target 72% genuine playback progress before completion monitoring
+  const LINKEDIN_COMPLETION_WAIT_TIMEOUT_MS = 20000;
+  let linkedInPlaybackRate = LINKEDIN_PLAYBACK_RATE_DEFAULT;
+
+  // Idempotent per-video state tracking for LinkedIn Learning
+  let linkedInState = {
+    contentId: null,
+    started: false,
+    targetReached: false,
+    targetReachedTimestamp: 0,
+    completionDetected: false,
+    advancing: false,
+    waitStartTime: 0,
+    loggedTimeout: false
+  };
+
+  function resetLinkedInState(newContentId = null) {
+    linkedInState = {
+      contentId: newContentId,
+      started: false,
+      targetReached: false,
+      targetReachedTimestamp: 0,
+      completionDetected: false,
+      advancing: false,
+      waitStartTime: 0,
+      loggedTimeout: false
+    };
+  }
+
   // Load initial settings
-  chrome.storage.local.get(['isRunning', 'seekOffset', 'hasStarred'], (res) => {
+  chrome.storage.local.get(['isRunning', 'seekOffset', 'hasStarred', 'linkedInPlaybackRate'], (res) => {
     isRunning = Boolean(res.isRunning) && Boolean(res.hasStarred);
     seekOffset = Number(res.seekOffset) || 2.5;
+    if (res.linkedInPlaybackRate) {
+      linkedInPlaybackRate = Number(res.linkedInPlaybackRate) || LINKEDIN_PLAYBACK_RATE_DEFAULT;
+    }
     if (isRunning) {
       startAutomationEngine();
     }
@@ -43,6 +78,7 @@
       activeVideoKey = null;
       hasSeekedCurrentVideo = false;
       advanceAttemptCount = 0;
+      resetLinkedInState();
       chrome.storage.local.set({ isRunning: true, isPausedForUser: false });
       logToPopup(`Starting CoursePilot (${platformName})...`, 'info');
       syncStateToStorage();
@@ -55,6 +91,7 @@
     isPausedForUser = false;
     activeVideoKey = null;
     hasSeekedCurrentVideo = false;
+    resetLinkedInState();
     chrome.storage.local.set({ isRunning: false, isPausedForUser: false });
     syncStateToStorage();
     removeFloatingOverlay();
@@ -66,6 +103,7 @@
     isPausedForUser = false;
     activeVideoKey = null;
     hasSeekedCurrentVideo = false;
+    resetLinkedInState();
     chrome.storage.local.set({ isPausedForUser: false });
     syncStateToStorage();
     removeFloatingOverlay();
@@ -80,11 +118,24 @@
 
   // Listen for storage changes as guaranteed communication channel
   chrome.storage.onChanged?.addListener((changes, areaName) => {
-    if (areaName === 'local' && changes.actionTrigger) {
-      const action = changes.actionTrigger.newValue;
-      if (action === 'START') handleStart();
-      else if (action === 'STOP') handleStop();
-      else if (action === 'RESUME') handleResume();
+    if (areaName === 'local') {
+      if (changes.linkedInPlaybackRate) {
+        linkedInPlaybackRate = Number(changes.linkedInPlaybackRate.newValue) || LINKEDIN_PLAYBACK_RATE_DEFAULT;
+        const video = findActiveVideoElement();
+        if (video) {
+          try { video.playbackRate = linkedInPlaybackRate; } catch (e) {}
+          if (isLinkedIn) {
+            applyLinkedInNativePlayback(linkedInPlaybackRate);
+          }
+        }
+        console.log(`[CoursePilot][LinkedIn] playbackRate dynamically updated to ${linkedInPlaybackRate}x`);
+      }
+      if (changes.actionTrigger) {
+        const action = changes.actionTrigger.newValue;
+        if (action === 'START') handleStart();
+        else if (action === 'STOP') handleStop();
+        else if (action === 'RESUME') handleResume();
+      }
     }
   });
 
@@ -265,6 +316,102 @@
     return false;
   }
 
+  /**
+   * Identifies the current active TOC item container in LinkedIn Learning
+   */
+  function getActiveLinkedInTocItem() {
+    const currentPath = window.location.pathname.replace(/\/$/, '');
+
+    // Active TOC selectors for LinkedIn Learning
+    const activeSelectors = [
+      'li.classroom-toc-item--selected',
+      'li.classroom-toc-item--active',
+      'li[data-test-toc-item-active]',
+      '[data-test-toc-item-active]',
+      '.classroom-toc-item--active',
+      '.classroom-toc-item--selected',
+      '.classroom-sidebar__item--active',
+      '.classroom-sidebar__item--selected',
+      'li.classroom-nav__item--active',
+      'li.classroom-toc-item.active',
+      'li[aria-current="true"]'
+    ];
+
+    for (const sel of activeSelectors) {
+      const el = document.querySelector(sel);
+      if (el) return el;
+    }
+
+    // Match by current URL pathname in sidebar links
+    try {
+      const tocLinks = document.querySelectorAll('a[href*="/learning/"]');
+      for (const a of tocLinks) {
+        const p = (a.pathname || '').replace(/\/$/, '');
+        if (p && p === currentPath) {
+          return a.closest('li') || a.closest('.classroom-toc-item') || a.closest('.classroom-sidebar__item') || a.parentElement;
+        }
+      }
+    } catch (e) {}
+
+    // Fallback: aria-current="page"
+    const pageLink = document.querySelector('a[aria-current="page"], a[aria-current="true"]');
+    if (pageLink) {
+      return pageLink.closest('li') || pageLink.closest('.classroom-toc-item') || pageLink.parentElement;
+    }
+
+    return null;
+  }
+
+  /**
+   * Strictly verifies whether the CURRENT LinkedIn lesson has transitioned to COMPLETED.
+   * Returns true ONLY if:
+   *   1. The active TOC item has the green checkmark (check-small/check-medium/.classroom-toc-item--completed), AND
+   *   2. It NO LONGER has the white/gray in-progress circle (circle-small/circle-medium).
+   */
+  function isCurrentLessonCompletedOnLinkedIn() {
+    const activeItem = getActiveLinkedInTocItem();
+    if (activeItem) {
+      const hasCircle = Boolean(activeItem.querySelector('svg[data-test-icon="circle-small"], svg[data-test-icon="circle-medium"], svg[data-test-icon*="circle" i], .classroom-toc-item--in-progress'));
+      const hasCheck = Boolean(activeItem.querySelector('svg[data-test-icon="check-small"], svg[data-test-icon="check-medium"], svg[data-test-icon*="check" i], .completed-icon'));
+      const hasCompletedClass = activeItem.classList.contains('classroom-toc-item--completed') ||
+                                activeItem.classList.contains('completed') ||
+                                activeItem.classList.contains('classroom-sidebar__item--completed') ||
+                                activeItem.hasAttribute('data-test-toc-item-completed');
+
+      // Strictly verified: checkmark is present AND in-progress circle is absent
+      if ((hasCheck || hasCompletedClass) && !hasCircle) {
+        return true;
+      }
+      return false;
+    }
+
+    // Fallback: check matching URL TOC links
+    try {
+      const currentPath = window.location.pathname.replace(/\/$/, '');
+      const allTocLinks = document.querySelectorAll('a[href*="/learning/"]');
+      for (const a of allTocLinks) {
+        const p = (a.pathname || '').replace(/\/$/, '');
+        if (p && p === currentPath) {
+          const parent = a.closest('li') || a.closest('.classroom-toc-item') || a.closest('.classroom-sidebar__item') || a.parentElement;
+          if (parent) {
+            const hasCircle = Boolean(parent.querySelector('svg[data-test-icon="circle-small"], svg[data-test-icon="circle-medium"], svg[data-test-icon*="circle" i], .classroom-toc-item--in-progress'));
+            const hasCheck = Boolean(parent.querySelector('svg[data-test-icon="check-small"], svg[data-test-icon="check-medium"], svg[data-test-icon*="check" i], .completed-icon'));
+            const hasCompletedClass = parent.classList.contains('classroom-toc-item--completed') ||
+                                      parent.classList.contains('completed') ||
+                                      parent.classList.contains('classroom-sidebar__item--completed') ||
+                                      parent.hasAttribute('data-test-toc-item-completed');
+
+            if ((hasCheck || hasCompletedClass) && !hasCircle) {
+              return true;
+            }
+          }
+        }
+      }
+    } catch (e) {}
+
+    return false;
+  }
+
   function isMarkedCompletedInToc() {
     const activeTocSelectors = [
       '[data-test-toc-item-active]',
@@ -324,12 +471,27 @@
   }
 
   function findActiveVideoElement() {
-    const videoSelectors = [
-      'video.c-video',
-      'video.vjs-tech',
+    // 1. Resilient container-scoped lookup (LinkedIn classroom player / Coursera video player)
+    const videoContainerSelectors = [
+      '.classroom-layout video',
+      '.classroom-video-player video',
+      '.classroom-player video',
       '.video-js video',
       'div[data-playback-type="video"] video',
-      'div[data-e2e="video-player"] video',
+      'div[data-e2e="video-player"] video'
+    ];
+
+    for (const sel of videoContainerSelectors) {
+      const v = document.querySelector(sel);
+      if (v && !isNaN(v.duration) && v.duration > 0 && (v.offsetWidth > 0 || v.offsetHeight > 0 || v.readyState >= 1)) {
+        return v;
+      }
+    }
+
+    // 2. Direct video class selectors
+    const videoSelectors = [
+      'video.vjs-tech',
+      'video.c-video',
       'video[src]',
       'video'
     ];
@@ -382,41 +544,123 @@
     } catch (e) {}
   }
 
-  function triggerMainWorldPlayerCompletion() {
+  /**
+   * LinkedIn Main-World Injection: Genuine Native Playback
+   * Uses Video.js and native video APIs to start playback at accelerated rate (default 4x, muted).
+   * Does NOT seek, does NOT dispatch synthetic events, allowing LinkedIn telemetry to observe genuine watch time.
+   */
+  function applyLinkedInNativePlayback(rate = 4.0) {
     executeInPageContext(`
-      // 1. Hook into window.videojs players
-      if (window.videojs) {
-        try {
+      try {
+        if (window.videojs) {
           const players = window.videojs.getPlayers ? window.videojs.getPlayers() : window.videojs.players;
-          for (const key in players) {
-            const p = players[key];
-            if (p && typeof p.duration === 'function') {
-              const d = p.duration();
-              if (d > 0) {
-                try { p.muted(true); } catch(e){}
-                try { p.playbackRate(16); } catch(e){}
-                p.currentTime(Math.max(0, d - 0.2));
+          if (players) {
+            for (const key in players) {
+              const p = players[key];
+              if (p && typeof p.play === 'function') {
+                try { p.muted(true); } catch(e) {}
+                try { p.playbackRate(${rate}); } catch(e) {}
                 p.play();
-                p.trigger('timeupdate');
-                p.trigger('ended');
               }
             }
           }
-        } catch(e) {}
-      }
+        }
+        const vids = document.querySelectorAll('video');
+        vids.forEach(v => {
+          if (v && v.duration > 0) {
+            v.muted = true;
+            try { v.playbackRate = ${rate}; } catch(e) {}
+            if (v.paused) {
+              v.play().catch(() => {});
+            }
+          }
+        });
+      } catch(e) {}
+    `);
+  }
 
-      // 2. Direct HTML5 video elements in Main World
+  /**
+   * Read-only Diagnostic Observer for LinkedIn Learning
+   * Listens for clientReportedContentStateChangeActions GraphQL operation.
+   * Completely read-only: does not modify, intercept, replay, forge, or replace requests.
+   */
+  let isLinkedInObserverInstalled = false;
+  function installLinkedInDiagnosticObserver() {
+    if (isLinkedInObserverInstalled || !isLinkedIn) return;
+    isLinkedInObserverInstalled = true;
+
+    executeInPageContext(`
+      (function() {
+        if (window.__coursepilot_observer_installed) return;
+        window.__coursepilot_observer_installed = true;
+
+        function checkGraphQLBody(url, body) {
+          try {
+            if (!body || typeof body !== 'string') return;
+            if (body.includes('clientReportedContentStateChangeActions') || (url && url.includes('clientReportedContentStateChangeActions'))) {
+              let parsed = null;
+              try { parsed = JSON.parse(body); } catch(e) {}
+              const stateData = parsed?.variables?.clientReportedStateChangeData || parsed?.clientReportedStateChangeData;
+              if (stateData) {
+                const prev = stateData.previousClientProgressState || 'UNKNOWN';
+                const curr = stateData.currentClientProgressState || 'UNKNOWN';
+                const viewed = stateData.durationInSecsViewed || '0';
+                console.log('[CoursePilot][LinkedIn Diagnostic] GraphQL content state change:', {
+                  previousClientProgressState: prev,
+                  currentClientProgressState: curr,
+                  durationInSecsViewed: viewed
+                });
+              }
+            }
+          } catch(e) {}
+        }
+
+        // Read-only fetch hook
+        const origFetch = window.fetch;
+        if (origFetch) {
+          window.fetch = function(...args) {
+            try {
+              const url = typeof args[0] === 'string' ? args[0] : (args[0]?.url || '');
+              const body = args[1]?.body;
+              checkGraphQLBody(url, body);
+            } catch(e) {}
+            return origFetch.apply(this, args);
+          };
+        }
+
+        // Read-only XHR hook
+        const origSend = XMLHttpRequest.prototype.send;
+        XMLHttpRequest.prototype.send = function(body) {
+          try {
+            checkGraphQLBody(this._url, body);
+          } catch(e) {}
+          return origSend.apply(this, arguments);
+        };
+        const origOpen = XMLHttpRequest.prototype.open;
+        XMLHttpRequest.prototype.open = function(method, url) {
+          this._url = url;
+          return origOpen.apply(this, arguments);
+        };
+      })();
+    `);
+  }
+
+  /**
+   * Fast-forward helper preserved for Coursera & L&T EduTech
+   */
+  function triggerCourseraLntFastForward(offset = 2.5) {
+    executeInPageContext(`
       const vids = document.querySelectorAll('video');
       vids.forEach(v => {
         if (v && v.duration > 0) {
           v.muted = true;
           try { v.playbackRate = 16; } catch(e) {}
-          if (v.currentTime < v.duration - 0.2) {
-            v.currentTime = Math.max(0, v.duration - 0.2);
+          const target = Math.max(0, v.duration - ${offset});
+          if (v.currentTime < target) {
+            v.currentTime = target;
           }
           v.play().catch(() => {});
           v.dispatchEvent(new Event('timeupdate', { bubbles: true }));
-          v.dispatchEvent(new Event('ended', { bubbles: true }));
         }
       });
     `);
@@ -461,7 +705,113 @@
 
       const currentKey = getVideoIdentifier(video);
 
-      // 4. If this is a new video, reset per-video flags
+      // ---------------------------------------------------------
+      // LinkedIn Learning: Genuine Accelerated Playback Flow
+      // ---------------------------------------------------------
+      if (isLinkedIn) {
+        installLinkedInDiagnosticObserver();
+
+        // Detect video change / reset per-video state
+        if (currentKey !== linkedInState.contentId) {
+          activeVideoKey = currentKey;
+          resetLinkedInState(currentKey);
+          syncStateToStorage();
+          console.log('[CoursePilot][LinkedIn] video detected');
+        }
+
+        if (linkedInState.advancing) {
+          return;
+        }
+
+        // Step A: Start native accelerated playback (idempotent, once per video)
+        if (!linkedInState.started) {
+          if (video.readyState >= 1) {
+            video.muted = true;
+            try {
+              video.playbackRate = linkedInPlaybackRate;
+            } catch (e) {}
+
+            applyLinkedInNativePlayback(linkedInPlaybackRate);
+
+            if (video.paused) {
+              video.play().catch(() => {});
+            }
+
+            linkedInState.started = true;
+            console.log('[CoursePilot][LinkedIn] native playback started');
+            console.log(`[CoursePilot][LinkedIn] playbackRate=${linkedInPlaybackRate}`);
+            const details = getPageDetails();
+            logToPopup(`▶ ${details.lessonTitle}: Playing natively (${linkedInPlaybackRate}x, muted)...`, 'info');
+          }
+          return;
+        }
+
+        // Step B: Maintain genuine playback during watchdog ticks
+        if (video.paused && !video.ended && !linkedInState.completionDetected) {
+          video.play().catch(() => {});
+        }
+        if (!video.muted) {
+          video.muted = true;
+        }
+        if (Math.abs(video.playbackRate - linkedInPlaybackRate) > 0.1) {
+          try { video.playbackRate = linkedInPlaybackRate; } catch (e) {}
+          applyLinkedInNativePlayback(linkedInPlaybackRate);
+        }
+
+        // Step C: Monitor genuine watched time
+        const progressRatio = duration > 0 ? (video.currentTime / duration) : 0;
+        if (!linkedInState.targetReached && progressRatio >= LINKEDIN_COMPLETION_TARGET) {
+          linkedInState.targetReached = true;
+          linkedInState.targetReachedTimestamp = Date.now();
+          linkedInState.waitStartTime = Date.now();
+          const percentStr = `${Math.round(LINKEDIN_COMPLETION_TARGET * 100)}%`;
+          console.log(`[CoursePilot][LinkedIn] watched target reached: ${percentStr}`);
+          console.log('[CoursePilot][LinkedIn] waiting for LinkedIn completion state');
+          const details = getPageDetails();
+          logToPopup(`⏳ ${details.lessonTitle}: Reached ${percentStr} watched target — waiting for LinkedIn completion state...`, 'info');
+        }
+
+        // Step D: Verify LinkedIn's own completion state (green checkmark on active lesson)
+        const isCurrentLessonCompleted = isCurrentLessonCompletedOnLinkedIn();
+
+        if (isCurrentLessonCompleted) {
+          if (!linkedInState.completionDetected) {
+            linkedInState.completionDetected = true;
+            console.log('[CoursePilot][LinkedIn] green check detected');
+            const details = getPageDetails();
+            logToPopup(`✓ ${details.lessonTitle}: Green check detected!`, 'success');
+          }
+
+          if (!linkedInState.advancing) {
+            linkedInState.advancing = true;
+            console.log('[CoursePilot][LinkedIn] advancing to next lesson');
+            lastCompletedVideoKey = currentKey;
+            lastAdvanceTime = Date.now();
+            advanceToNextTopic();
+          }
+          return;
+        }
+
+        // Step E: If target reached or video naturally ended, wait for LinkedIn to update
+        if (linkedInState.targetReached || video.ended || video.currentTime >= duration - 0.5) {
+          const elapsedWait = Date.now() - (linkedInState.waitStartTime || Date.now());
+          if (elapsedWait > LINKEDIN_COMPLETION_WAIT_TIMEOUT_MS) {
+            if (!linkedInState.loggedTimeout) {
+              linkedInState.loggedTimeout = true;
+              console.warn('[CoursePilot][LinkedIn] completion not confirmed');
+              logToPopup(`[LinkedIn] Completion not confirmed yet — waiting for green check...`, 'warning');
+            }
+          }
+          // Do NOT advance! Continue waiting for LinkedIn tracking
+          return;
+        }
+
+        return;
+      }
+
+      // ---------------------------------------------------------
+      // Coursera & L&T EduTech: Existing Fast-Forward & Completion
+      // ---------------------------------------------------------
       if (currentKey !== activeVideoKey) {
         activeVideoKey = currentKey;
         hasSeekedCurrentVideo = false;
@@ -470,18 +820,16 @@
         syncStateToStorage();
       }
 
-      // 5. Main-World Fast-Forward & Completion Trigger
       if (!hasSeekedCurrentVideo) {
         if (video.readyState >= 1) {
-          // Trigger in both Main World (Video.js) and Content Script World
-          triggerMainWorldPlayerCompletion();
+          triggerCourseraLntFastForward(seekOffset);
 
           video.muted = true;
           try {
             video.playbackRate = 16.0;
           } catch {}
-          
-          const targetTime = Math.max(0, duration - 0.3);
+
+          const targetTime = Math.max(0, duration - seekOffset);
           video.currentTime = targetTime;
           video.dispatchEvent(new Event('seeking', { bubbles: true }));
           video.dispatchEvent(new Event('seeked', { bubbles: true }));
@@ -497,15 +845,13 @@
         return;
       }
 
-      // 6. Ensure video reaches absolute end and triggers completion
       if (hasSeekedCurrentVideo) {
-        triggerMainWorldPlayerCompletion();
+        triggerCourseraLntFastForward(seekOffset);
         if (video.paused && !video.ended) {
           video.play().catch(() => {});
         }
       }
 
-      // 7. Verify Green Checkmark in TOC & Confirm Completion
       const isNaturalEnd = video.ended || video.currentTime >= duration - 0.1;
       const isTocCompleted = isMarkedCompletedInToc();
 
@@ -516,12 +862,11 @@
 
         const elapsedSinceEnd = Date.now() - videoCompletedTimestamp;
 
-        // Check if green tick is confirmed or elapsed grace period
         if (isTocCompleted || elapsedSinceEnd >= 4000) {
           if (lastCompletedVideoKey !== currentKey) {
             lastCompletedVideoKey = currentKey;
             const details = getPageDetails();
-            const statusLabel = isTocCompleted ? '✓ Green Tick Confirmed' : '✓ Completed';
+            const statusLabel = isTocCompleted ? '✓ Completed' : '✓ Completed';
             logToPopup(`✓ ${details.lessonTitle}: ${statusLabel}`, 'success');
           }
 
@@ -805,10 +1150,12 @@
   window.addEventListener('popstate', () => {
     activeVideoKey = null;
     hasSeekedCurrentVideo = false;
+    resetLinkedInState();
   });
   window.addEventListener('hashchange', () => {
     activeVideoKey = null;
     hasSeekedCurrentVideo = false;
+    resetLinkedInState();
   });
 })();
 

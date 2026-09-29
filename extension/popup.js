@@ -25,6 +25,34 @@ document.addEventListener('DOMContentLoaded', () => {
   const gateStarBtn = document.getElementById('gate-star-btn');
   const gateConfirmBtn = document.getElementById('gate-confirm-btn');
 
+  // Playback Speed Elements
+  const speedCurrentBadge = document.getElementById('speed-current-badge');
+  const speedButtons = document.querySelectorAll('.speed-btn');
+
+  function updateSpeedUi(speed) {
+    const num = Number(speed) || 4;
+    speedButtons.forEach(btn => {
+      const btnSpeed = Number(btn.getAttribute('data-speed'));
+      if (btnSpeed === num) {
+        btn.classList.add('active');
+      } else {
+        btn.classList.remove('active');
+      }
+    });
+    if (speedCurrentBadge) {
+      speedCurrentBadge.innerText = `${num}x`;
+    }
+  }
+
+  speedButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const speed = Number(btn.getAttribute('data-speed')) || 4;
+      updateSpeedUi(speed);
+      chrome.storage.local.set({ linkedInPlaybackRate: speed });
+      addLog(`⚡ Speed changed to ${speed}x`, 'info');
+    });
+  });
+
   let hasStarred = false;
   let targetTabId = null;
   let isTargetTabActive = true;
@@ -44,10 +72,12 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  // Check stored star status
-  chrome.storage.local.get(['hasStarred', 'activeCourseState', 'isRunning'], (res) => {
+  // Check stored star status and speed
+  chrome.storage.local.get(['hasStarred', 'activeCourseState', 'isRunning', 'linkedInPlaybackRate'], (res) => {
     hasStarred = Boolean(res.hasStarred);
     updateStarBadgeUi();
+    const storedSpeed = Number(res.linkedInPlaybackRate) || 4;
+    updateSpeedUi(storedSpeed);
     if (!hasStarred) {
       starGateModal.style.display = 'flex';
     }

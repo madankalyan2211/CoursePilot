@@ -368,18 +368,25 @@ document.addEventListener('DOMContentLoaded', () => {
         actionTimestamp: Date.now()
       });
 
-      // 2. Direct scripting injection & message
+      // 2. Direct scripting injection & message across all frames
       if (chrome.scripting) {
         chrome.scripting.executeScript({
-          target: { tabId: targetTabId },
-          files: ['content.js']
-        }, () => {
-          // Send direct message
-          chrome.tabs.sendMessage(targetTabId, { action }, (res) => {
-            if (chrome.runtime.lastError) {
-              // Storage.onChanged or script execution will handle it
-            }
-          });
+          target: { tabId: targetTabId, allFrames: true },
+          func: (act) => {
+            if (act === 'START') window.__coursepilotStart?.();
+            else if (act === 'STOP') window.__coursepilotStop?.();
+            else if (act === 'RESUME') window.__coursepilotResume?.();
+          },
+          args: [action]
+        }).catch(() => {});
+
+        chrome.tabs.sendMessage(targetTabId, { action }, (res) => {
+          if (chrome.runtime.lastError) {
+            chrome.scripting.executeScript({
+              target: { tabId: targetTabId, allFrames: true },
+              files: ['content.js']
+            }).catch(() => {});
+          }
         });
       } else {
         chrome.tabs.sendMessage(targetTabId, { action }, () => {});
@@ -611,24 +618,39 @@ document.addEventListener('DOMContentLoaded', () => {
 
   switchTabBtn?.addEventListener('click', () => {
     if (targetTabId) {
-      chrome.tabs.update(targetTabId, { active: true });
-      window.close();
+      chrome.tabs.get(targetTabId, (tab) => {
+        if (tab?.windowId) {
+          chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
+        }
+        chrome.tabs.update(targetTabId, { active: true });
+        window.close();
+      });
     }
   });
 
+  function openOrSwitchToUrl(urlPattern, defaultUrl) {
+    chrome.tabs.query({ url: urlPattern }, (tabs) => {
+      if (tabs && tabs.length > 0) {
+        const tab = tabs[0];
+        if (tab.windowId) chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
+        chrome.tabs.update(tab.id, { active: true });
+      } else {
+        chrome.tabs.create({ url: defaultUrl });
+      }
+      window.close();
+    });
+  }
+
   launchLinkedInBtn?.addEventListener('click', () => {
-    chrome.tabs.create({ url: 'https://www.linkedin.com/learning' });
-    window.close();
+    openOrSwitchToUrl('*://*.linkedin.com/learning/*', 'https://www.linkedin.com/learning');
   });
 
   launchCourseraBtn?.addEventListener('click', () => {
-    chrome.tabs.create({ url: 'https://www.coursera.org/learn' });
-    window.close();
+    openOrSwitchToUrl('*://*.coursera.org/*', 'https://www.coursera.org/learn');
   });
 
   launchLntBtn?.addEventListener('click', () => {
-    chrome.tabs.create({ url: 'https://lntedutech.com' });
-    window.close();
+    openOrSwitchToUrl('*://*.lntedutech.com/*', 'https://lntedutech.com');
   });
 });
 

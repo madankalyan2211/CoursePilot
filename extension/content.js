@@ -5,6 +5,19 @@
  */
 
 (function () {
+  // Terminate any previous CoursePilot instance running in this document/frame
+  if (window.__coursepilot_cleanup) {
+    try { window.__coursepilot_cleanup(); } catch (e) {}
+  }
+  if (window.__coursepilot_loop_interval) {
+    clearInterval(window.__coursepilot_loop_interval);
+    window.__coursepilot_loop_interval = null;
+  }
+  if (window.__coursepilot_active_controller) {
+    try { window.__coursepilot_active_controller.destroy(); } catch (e) {}
+    window.__coursepilot_active_controller = null;
+  }
+
   let isRunning = false;
   let isPausedForUser = false;
   let seekOffset = 2.5;
@@ -532,7 +545,9 @@
 
   function startAutomationEngine() {
     if (loopIntervalId) clearInterval(loopIntervalId);
+    if (window.__coursepilot_loop_interval) clearInterval(window.__coursepilot_loop_interval);
     loopIntervalId = setInterval(automationTick, 400);
+    window.__coursepilot_loop_interval = loopIntervalId;
   }
 
   function stopAutomationEngine() {
@@ -540,8 +555,21 @@
       clearInterval(loopIntervalId);
       loopIntervalId = null;
     }
+    if (window.__coursepilot_loop_interval) {
+      clearInterval(window.__coursepilot_loop_interval);
+      window.__coursepilot_loop_interval = null;
+    }
     isProcessingTick = false;
   }
+
+  window.__coursepilot_cleanup = function () {
+    stopAutomationEngine();
+    if (currentLinkedInController) {
+      try { currentLinkedInController.destroy(); } catch (e) {}
+      currentLinkedInController = null;
+    }
+    window.__coursepilot_active_controller = null;
+  };
 
   /**
    * Video Speed Controller (VSC) Speed Arbitration Core

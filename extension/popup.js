@@ -25,9 +25,17 @@ document.addEventListener('DOMContentLoaded', () => {
   const gateStarBtn = document.getElementById('gate-star-btn');
   const gateConfirmBtn = document.getElementById('gate-confirm-btn');
 
-  // Playback Speed Elements
+  // Playback Speed Elements (LinkedIn Learning Only)
+  const speedControlCard = document.getElementById('speed-control-card');
   const speedCurrentBadge = document.getElementById('speed-current-badge');
   const speedButtons = document.querySelectorAll('.speed-btn');
+
+  function updateSpeedControlVisibility(platformOrUrl) {
+    if (!speedControlCard) return;
+    const str = String(platformOrUrl || '').toLowerCase();
+    const isLinkedIn = str.includes('linkedin');
+    speedControlCard.style.display = isLinkedIn ? 'block' : 'none';
+  }
 
   function updateSpeedUi(speed) {
     const num = Number(speed) || 4;
@@ -99,6 +107,8 @@ document.addEventListener('DOMContentLoaded', () => {
   function updateUi(state, isActiveTab = true) {
     if (!state) return;
 
+    updateSpeedControlVisibility(state.platform || state.url);
+
     if (state.courseTitle) courseName.innerText = state.courseTitle;
     if (state.lessonTitle) lessonName.innerText = state.lessonTitle;
 
@@ -129,6 +139,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function showNoCourseTabUi() {
+    updateSpeedControlVisibility(null);
     statusPill.className = 'status-pill';
     statusText.innerText = 'No Course Open';
     courseName.innerText = 'No Active Course Tab';
@@ -185,6 +196,7 @@ document.addEventListener('DOMContentLoaded', () => {
         isTargetTabActive = true;
         courseName.innerText = activeTab.title.split('|')[0].trim() || 'Course Tab';
         lessonName.innerText = 'Ready to automate';
+        updateSpeedControlVisibility(activeTab.url);
 
         chrome.tabs.sendMessage(targetTabId, { action: 'GET_STATE' }, (response) => {
           if (chrome.runtime.lastError || !response) {
@@ -216,6 +228,7 @@ document.addEventListener('DOMContentLoaded', () => {
             isTargetTabActive = false;
             courseName.innerText = courseTab.title.split('|')[0].trim() || 'Background Course';
             lessonName.innerText = 'Course open in another tab';
+            updateSpeedControlVisibility(courseTab.url);
 
             chrome.tabs.sendMessage(targetTabId, { action: 'GET_STATE' }, (response) => {
               if (chrome.runtime.lastError || !response) {

@@ -160,6 +160,7 @@
   });
 
   function syncStateToStorage() {
+    if (!chrome.runtime?.id) return;
     try {
       const details = getPageDetails();
       chrome.storage.local.set({
@@ -171,11 +172,14 @@
   }
 
   function logToPopup(text, level = 'info') {
-    const timestamp = new Date().toTimeString().split(' ')[0];
-    chrome.runtime.sendMessage({
-      type: 'LOG',
-      log: { timestamp, text, level }
-    }).catch(() => {});
+    if (!chrome.runtime?.id) return;
+    try {
+      const timestamp = new Date().toTimeString().split(' ')[0];
+      chrome.runtime.sendMessage({
+        type: 'LOG',
+        log: { timestamp, text, level }
+      }).catch(() => {});
+    } catch {}
   }
 
   function normalizeUrl(rawUrl) {
@@ -625,6 +629,10 @@
   let videoCompletedTimestamp = 0;
 
   async function automationTick() {
+    if (!chrome.runtime?.id) {
+      stopAutomationEngine();
+      return;
+    }
     if (!isRunning || isPausedForUser || isProcessingTick) return;
     isProcessingTick = true;
 
@@ -839,6 +847,10 @@
         }
       }
     } catch (err) {
+      if (err?.message?.includes('Extension context invalidated') || !chrome.runtime?.id) {
+        stopAutomationEngine();
+        return;
+      }
       console.warn('CoursePilot tick error:', err);
     } finally {
       isProcessingTick = false;

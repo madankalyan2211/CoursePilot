@@ -524,9 +524,60 @@
   }
 
   /**
+   * Video Speed Controller (VSC) Speed Arbitration Core
+   * Ported from github.com/igrigorik/videospeed
+   */
+  class VscSpeedArbitration {
+    constructor() {
+      this.pendingWrites = new WeakMap();
+    }
+
+    noteWrite(video, rate, { suppressPropagation = true } = {}) {
+      let queue = this.pendingWrites.get(video);
+      if (!queue) {
+        queue = [];
+        this.pendingWrites.set(video, queue);
+      }
+      queue.push({
+        rate: Number(rate.toFixed(2)),
+        at: performance.now(),
+        suppressPropagation,
+      });
+      if (queue.length > 5) {
+        queue.shift();
+      }
+    }
+
+    consumeEcho(video, rate) {
+      let queue = this.pendingWrites.get(video);
+      if (!queue || queue.length === 0) {
+        return false;
+      }
+      const now = performance.now();
+      queue = queue.filter(write => now - write.at <= 2000);
+      if (queue.length === 0) {
+        this.pendingWrites.delete(video);
+        return false;
+      }
+      this.pendingWrites.set(video, queue);
+
+      const target = Number(rate.toFixed(2));
+      const idx = queue.findIndex(write => Math.abs(write.rate - target) <= 0.05);
+      if (idx === -1) {
+        return false;
+      }
+      const echo = queue[idx];
+      queue.splice(0, idx + 1);
+      return echo;
+    }
+  }
+
+  const vscArbitration = new VscSpeedArbitration();
+
+  /**
    * LinkedIn Native High-Speed Playback Controller
-   * Architecture (inspired by Video Speed Controller):
-   * OBSERVE MEDIA → CONTROL NATIVE PLAYBACK RATE → LET VIDEO PLAY NATURALLY → DETECT END → ADVANCE.
+   * Built directly on Video Speed Controller (github.com/igrigorik/videospeed)
+   * Architecture: OBSERVE MEDIA → WRITE RATE WITH ECHO FILTER → CAPTURE RATECHANGE → NATURAL ADVANCE
    */
   class LinkedInPlaybackController {
     constructor(video, requestedRate = 100) {
@@ -538,15 +589,16 @@
       this.completed = false;
       this.advancing = false;
       this.lastRestoreTime = 0;
-      this.restoreCooldownMs = 300;
-      this._isSettingSpeed = false;
+      this.restoreCooldownMs = 250;
 
       // Bound event listeners
       this._onRateChange = this.handleRateChange.bind(this);
       this._onEnded = this.handleEnded.bind(this);
       this._onTimeUpdate = this.handleTimeUpdate.bind(this);
-      this._onPlay = () => { this.playing = true; };
-      this._onPause = () => { this.playing = false; };
+      this._onPlay = this.handlePlay.bind(this);
+      this._onPause = this.handlePause.bind(this);
+      this._onSeeked = this.handleSeeked.bind(this);
+      this._onLoadStart = this.handleLoadStart.bind(this);
 
       this.init();
     }
@@ -557,19 +609,21 @@
 
       console.log('[CoursePilot][LinkedIn] Video detected');
 
-      // Attach event listeners (capture phase on ratechange prevents LinkedIn fightback)
+      // Attach event listeners using Video Speed Controller's capture-phase strategy
       this.video.addEventListener('ratechange', this._onRateChange, true);
-      this.video.addEventListener('ended', this._onEnded);
-      this.video.addEventListener('timeupdate', this._onTimeUpdate);
       this.video.addEventListener('play', this._onPlay);
       this.video.addEventListener('pause', this._onPause);
+      this.video.addEventListener('seeked', this._onSeeked);
+      this.video.addEventListener('loadstart', this._onLoadStart);
+      this.video.addEventListener('ended', this._onEnded);
+      this.video.addEventListener('timeupdate', this._onTimeUpdate);
 
-      // Mute video
+      // Mute video to prevent audio distortion at high speeds
       this.video.muted = true;
       this.video.defaultMuted = true;
       try { this.video.volume = 0; } catch (e) {}
 
-      // Apply requested rate
+      // Write initial rate using VSC arbitration write strategy
       this.applySpeed();
 
       // Start natural playback
@@ -589,26 +643,32 @@
       logToPopup(`▶ ${details.lessonTitle}: Playing (${this.effectiveRate}x, native)...`, 'info');
     }
 
+    /**
+     * VSC writeRate: note write token in arbitration registry, apply safe rate to video
+     */
     applySpeed() {
-      this._isSettingSpeed = true;
-      let targetRate = this.requestedRate;
+      let targetRate = Number(this.requestedRate);
+      if (isNaN(targetRate) || targetRate <= 0) targetRate = 100;
+
+      // Chromium clamps playbackRate to 16.0; values > 16.0 throw NotSupportedError
+      let safeRate = targetRate;
+      if (safeRate > 16.0) {
+        safeRate = 16.0;
+      }
+
+      // Record echo token in VSC arbitration filter with propagation suppression enabled
+      vscArbitration.noteWrite(this.video, safeRate, { suppressPropagation: true });
 
       try {
-        this.video.playbackRate = targetRate;
+        this.video.playbackRate = safeRate;
       } catch (err) {
-        // Chromium throws NotSupportedError if targetRate > 16.0
-        // Safely clamp to browser's native upper limit of 16.0
-        targetRate = Math.min(16.0, Math.max(0.0625, targetRate));
         try {
-          this.video.playbackRate = targetRate;
-        } catch (err2) {
-          console.warn('[CoursePilot][LinkedIn] Could not set clamped playbackRate:', err2);
-        }
+          safeRate = Math.min(16.0, Math.max(0.0625, safeRate));
+          this.video.playbackRate = safeRate;
+        } catch (err2) {}
       }
 
       this.effectiveRate = this.video.playbackRate;
-      this._isSettingSpeed = false;
-
       console.log(`[CoursePilot][LinkedIn] Requested speed: ${this.requestedRate}x`);
       console.log(`[CoursePilot][LinkedIn] Effective speed: ${this.effectiveRate}x`);
     }
@@ -620,31 +680,63 @@
       logToPopup(`⚡ Speed: ${this.effectiveRate}x (requested ${this.requestedRate}x)`, 'info');
     }
 
+    /**
+     * VSC handleRateChange: consume write echo tokens and suppress site fightback
+     */
     handleRateChange(e) {
       if (!this.initialized || this.completed) return;
 
-      // If we are currently setting speed ourselves, stop immediate propagation
-      if (this._isSettingSpeed) {
-        if (e && typeof e.stopImmediatePropagation === 'function') {
+      const currentRate = this.video.playbackRate;
+
+      // Check if this ratechange is an echo of our own write
+      const echo = vscArbitration.consumeEcho(this.video, currentRate);
+      if (echo) {
+        if (echo.suppressPropagation && e && typeof e.stopImmediatePropagation === 'function') {
+          // Hide our write from LinkedIn's page scripts to prevent reactive fightback
           e.stopImmediatePropagation();
         }
         return;
       }
 
-      const currentRate = this.video.playbackRate;
-
-      // If LinkedIn or the player reset the speed away from our effective rate
+      // If LinkedIn or external script modified playbackRate away from effective rate
       if (Math.abs(currentRate - this.effectiveRate) > 0.05) {
         if (e && typeof e.stopImmediatePropagation === 'function') {
           e.stopImmediatePropagation();
         }
-        const now = Date.now();
+
+        const now = performance.now();
         if (now - this.lastRestoreTime > this.restoreCooldownMs) {
           this.lastRestoreTime = now;
           console.log('[CoursePilot][LinkedIn] Rate reset detected');
           this.applySpeed();
           console.log(`[CoursePilot][LinkedIn] Rate restored: ${this.effectiveRate}x`);
         }
+      }
+    }
+
+    /**
+     * VSC Lifecycle Speed Enforcement (play, seeked, loadstart)
+     */
+    handlePlay() {
+      this.playing = true;
+      if (!this.completed && Math.abs(this.video.playbackRate - this.effectiveRate) > 0.05) {
+        this.applySpeed();
+      }
+    }
+
+    handlePause() {
+      this.playing = false;
+    }
+
+    handleSeeked() {
+      if (!this.completed && Math.abs(this.video.playbackRate - this.effectiveRate) > 0.05) {
+        this.applySpeed();
+      }
+    }
+
+    handleLoadStart() {
+      if (!this.completed) {
+        this.applySpeed();
       }
     }
 
@@ -689,10 +781,12 @@
       this.playing = false;
       try {
         this.video.removeEventListener('ratechange', this._onRateChange, true);
-        this.video.removeEventListener('ended', this._onEnded);
-        this.video.removeEventListener('timeupdate', this._onTimeUpdate);
         this.video.removeEventListener('play', this._onPlay);
         this.video.removeEventListener('pause', this._onPause);
+        this.video.removeEventListener('seeked', this._onSeeked);
+        this.video.removeEventListener('loadstart', this._onLoadStart);
+        this.video.removeEventListener('ended', this._onEnded);
+        this.video.removeEventListener('timeupdate', this._onTimeUpdate);
       } catch (e) {}
     }
   }

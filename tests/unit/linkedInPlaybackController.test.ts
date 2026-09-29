@@ -56,6 +56,55 @@ class MockVideoElement extends EventTarget {
 }
 
 /**
+ * Video Speed Controller (VSC) Speed Arbitration Core
+ * Ported from github.com/igrigorik/videospeed
+ */
+class VscSpeedArbitration {
+  private pendingWrites = new WeakMap<MockVideoElement, Array<{ rate: number; at: number; suppressPropagation: boolean }>>();
+
+  public noteWrite(video: MockVideoElement, rate: number, { suppressPropagation = true } = {}): void {
+    let queue = this.pendingWrites.get(video);
+    if (!queue) {
+      queue = [];
+      this.pendingWrites.set(video, queue);
+    }
+    queue.push({
+      rate: Number(rate.toFixed(2)),
+      at: performance.now(),
+      suppressPropagation,
+    });
+    if (queue.length > 5) {
+      queue.shift();
+    }
+  }
+
+  public consumeEcho(video: MockVideoElement, rate: number): { rate: number; at: number; suppressPropagation: boolean } | false {
+    let queue = this.pendingWrites.get(video);
+    if (!queue || queue.length === 0) {
+      return false;
+    }
+    const now = performance.now();
+    queue = queue.filter(write => now - write.at <= 2000);
+    if (queue.length === 0) {
+      this.pendingWrites.delete(video);
+      return false;
+    }
+    this.pendingWrites.set(video, queue);
+
+    const target = Number(rate.toFixed(2));
+    const idx = queue.findIndex(write => Math.abs(write.rate - target) <= 0.05);
+    if (idx === -1) {
+      return false;
+    }
+    const echo = queue[idx];
+    queue.splice(0, idx + 1);
+    return echo;
+  }
+}
+
+const vscArbitration = new VscSpeedArbitration();
+
+/**
  * Reference implementation mirroring extension/content.js LinkedInPlaybackController
  */
 class LinkedInPlaybackController {
@@ -67,15 +116,16 @@ class LinkedInPlaybackController {
   public completed: boolean = false;
   public advancing: boolean = false;
   public lastRestoreTime: number = 0;
-  public restoreCooldownMs: number = 300;
+  public restoreCooldownMs: number = 250;
   public advanceCallback?: () => void;
-  public _isSettingSpeed: boolean = false;
 
   private _onRateChange: (e?: any) => void;
   private _onEnded: () => void;
   private _onTimeUpdate: () => void;
   private _onPlay: () => void;
   private _onPause: () => void;
+  private _onSeeked: () => void;
+  private _onLoadStart: () => void;
 
   constructor(video: MockVideoElement, requestedRate: number = 100, onAdvance?: () => void) {
     this.video = video;
@@ -85,8 +135,10 @@ class LinkedInPlaybackController {
     this._onRateChange = this.handleRateChange.bind(this);
     this._onEnded = this.handleEnded.bind(this);
     this._onTimeUpdate = this.handleTimeUpdate.bind(this);
-    this._onPlay = () => { this.playing = true; };
-    this._onPause = () => { this.playing = false; };
+    this._onPlay = this.handlePlay.bind(this);
+    this._onPause = this.handlePause.bind(this);
+    this._onSeeked = this.handleSeeked.bind(this);
+    this._onLoadStart = this.handleLoadStart.bind(this);
 
     this.init();
   }
@@ -96,10 +148,12 @@ class LinkedInPlaybackController {
     this.initialized = true;
 
     this.video.addEventListener('ratechange', this._onRateChange, true as any);
-    this.video.addEventListener('ended', this._onEnded);
-    this.video.addEventListener('timeupdate', this._onTimeUpdate);
     this.video.addEventListener('play', this._onPlay);
     this.video.addEventListener('pause', this._onPause);
+    this.video.addEventListener('seeked', this._onSeeked);
+    this.video.addEventListener('loadstart', this._onLoadStart);
+    this.video.addEventListener('ended', this._onEnded);
+    this.video.addEventListener('timeupdate', this._onTimeUpdate);
 
     this.video.muted = true;
     this.video.defaultMuted = true;
@@ -117,20 +171,26 @@ class LinkedInPlaybackController {
   }
 
   public applySpeed(): void {
-    this._isSettingSpeed = true;
-    let targetRate = this.requestedRate;
+    let targetRate = Number(this.requestedRate);
+    if (isNaN(targetRate) || targetRate <= 0) targetRate = 100;
+
+    let safeRate = targetRate;
+    if (safeRate > 16.0) {
+      safeRate = 16.0;
+    }
+
+    vscArbitration.noteWrite(this.video, safeRate, { suppressPropagation: true });
 
     try {
-      this.video.playbackRate = targetRate;
+      this.video.playbackRate = safeRate;
     } catch (err) {
-      targetRate = Math.min(16.0, Math.max(0.0625, targetRate));
       try {
-        this.video.playbackRate = targetRate;
+        safeRate = Math.min(16.0, Math.max(0.0625, safeRate));
+        this.video.playbackRate = safeRate;
       } catch (err2) {}
     }
 
     this.effectiveRate = this.video.playbackRate;
-    this._isSettingSpeed = false;
   }
 
   public setSpeed(newRate: number): void {
@@ -141,20 +201,46 @@ class LinkedInPlaybackController {
   public handleRateChange(e?: any): void {
     if (!this.initialized || this.completed) return;
 
-    if (this._isSettingSpeed) {
-      e?.stopImmediatePropagation?.();
+    const currentRate = this.video.playbackRate;
+
+    const echo = vscArbitration.consumeEcho(this.video, currentRate);
+    if (echo) {
+      if (echo.suppressPropagation) {
+        e?.stopImmediatePropagation?.();
+      }
       return;
     }
 
-    const currentRate = this.video.playbackRate;
-
     if (Math.abs(currentRate - this.effectiveRate) > 0.05) {
       e?.stopImmediatePropagation?.();
-      const now = Date.now();
+      const now = performance.now();
       if (now - this.lastRestoreTime > this.restoreCooldownMs) {
         this.lastRestoreTime = now;
         this.applySpeed();
       }
+    }
+  }
+
+  public handlePlay(): void {
+    this.playing = true;
+    if (!this.completed && Math.abs(this.video.playbackRate - this.effectiveRate) > 0.05) {
+      this.applySpeed();
+    }
+  }
+
+  public handlePause(): void {
+    this.playing = false;
+  }
+
+  public handleSeeked(): void {
+    if (!this.completed && Math.abs(this.video.playbackRate - this.effectiveRate) > 0.05) {
+      this.applySpeed();
+    }
+  }
+
+  public handleLoadStart(): void {
+    if (!this.completed) {
+      this.applySpeed();
     }
   }
 

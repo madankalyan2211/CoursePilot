@@ -24,36 +24,13 @@
   const isLinkedIn = !isCoursera && !isLnt && window.location.hostname.includes('linkedin.com');
   const platformName = isLnt ? 'L&T EduTech' : (isCoursera ? 'Coursera' : 'LinkedIn Learning');
 
-  // Configurable LinkedIn Learning settings
-  const LINKEDIN_PLAYBACK_RATE_DEFAULT = 4.0;
-  const LINKEDIN_COMPLETION_TARGET = 0.72; // Target 72% genuine playback progress before completion monitoring
-  const LINKEDIN_COMPLETION_WAIT_TIMEOUT_MS = 20000;
+  // Configurable LinkedIn Learning settings (Default: 100x)
+  const LINKEDIN_PLAYBACK_RATE_DEFAULT = 100.0;
   let linkedInPlaybackRate = LINKEDIN_PLAYBACK_RATE_DEFAULT;
 
-  // Idempotent per-video state tracking for LinkedIn Learning
-  let linkedInState = {
-    contentId: null,
-    started: false,
-    targetReached: false,
-    targetReachedTimestamp: 0,
-    completionDetected: false,
-    advancing: false,
-    waitStartTime: 0,
-    loggedTimeout: false
-  };
-
-  function resetLinkedInState(newContentId = null) {
-    linkedInState = {
-      contentId: newContentId,
-      started: false,
-      targetReached: false,
-      targetReachedTimestamp: 0,
-      completionDetected: false,
-      advancing: false,
-      waitStartTime: 0,
-      loggedTimeout: false
-    };
-  }
+  // WeakMap tracking for LinkedIn video playback controllers (one per video element)
+  const linkedInControllers = new WeakMap();
+  let currentLinkedInController = null;
 
   // Load initial settings
   chrome.storage.local.get(['isRunning', 'seekOffset', 'hasStarred', 'linkedInPlaybackRate'], (res) => {
@@ -78,7 +55,10 @@
       activeVideoKey = null;
       hasSeekedCurrentVideo = false;
       advanceAttemptCount = 0;
-      resetLinkedInState();
+      if (currentLinkedInController) {
+        currentLinkedInController.destroy();
+        currentLinkedInController = null;
+      }
       chrome.storage.local.set({ isRunning: true, isPausedForUser: false });
       logToPopup(`Starting CoursePilot (${platformName})...`, 'info');
       syncStateToStorage();
@@ -91,7 +71,10 @@
     isPausedForUser = false;
     activeVideoKey = null;
     hasSeekedCurrentVideo = false;
-    resetLinkedInState();
+    if (currentLinkedInController) {
+      currentLinkedInController.destroy();
+      currentLinkedInController = null;
+    }
     const video = findActiveVideoElement();
     if (video) {
       try { video.playbackRate = 1.0; } catch (e) {}
@@ -107,7 +90,10 @@
     isPausedForUser = false;
     activeVideoKey = null;
     hasSeekedCurrentVideo = false;
-    resetLinkedInState();
+    if (currentLinkedInController) {
+      currentLinkedInController.destroy();
+      currentLinkedInController = null;
+    }
     chrome.storage.local.set({ isPausedForUser: false });
     syncStateToStorage();
     removeFloatingOverlay();
@@ -125,15 +111,9 @@
     if (areaName === 'local') {
       if (changes.linkedInPlaybackRate) {
         linkedInPlaybackRate = Number(changes.linkedInPlaybackRate.newValue) || LINKEDIN_PLAYBACK_RATE_DEFAULT;
-        const effectiveRate = Math.min(16.0, Math.max(0.5, linkedInPlaybackRate));
-        const video = findActiveVideoElement();
-        if (video) {
-          try { video.playbackRate = effectiveRate; } catch (e) {}
-          if (isLinkedIn) {
-            applyLinkedInNativePlayback(effectiveRate);
-          }
+        if (isLinkedIn && currentLinkedInController) {
+          currentLinkedInController.setSpeed(linkedInPlaybackRate);
         }
-        console.log(`[CoursePilot][LinkedIn] playbackRate dynamically updated to ${effectiveRate}x (requested: ${linkedInPlaybackRate}x)`);
       }
       if (changes.actionTrigger) {
         const action = changes.actionTrigger.newValue;
@@ -528,29 +508,180 @@
   }
 
   /**
-   * LinkedIn Accelerated Playback
-   * Sets video playbackRate cleanly on HTML5 media elements.
-   * Completely CSP-compliant: zero inline script tags, zero monkey-patching of Video.js.
+   * LinkedIn Native High-Speed Playback Controller
+   * Architecture (inspired by Video Speed Controller):
+   * OBSERVE MEDIA → CONTROL NATIVE PLAYBACK RATE → LET VIDEO PLAY NATURALLY → DETECT END → ADVANCE.
    */
-  function applyLinkedInNativePlayback(rate = 4.0) {
-    const safeRate = Math.min(16.0, Math.max(0.5, Number(rate) || 4.0));
-    const vids = document.querySelectorAll('video');
-    vids.forEach(v => {
-      if (!v) return;
-      if (Math.abs(v.playbackRate - safeRate) > 0.05) {
-        try {
-          v.playbackRate = safeRate;
-        } catch (e) {}
+  class LinkedInPlaybackController {
+    constructor(video, requestedRate = 100) {
+      this.video = video;
+      this.requestedRate = Number(requestedRate) || 100;
+      this.effectiveRate = 1.0;
+      this.initialized = false;
+      this.playing = false;
+      this.completed = false;
+      this.advancing = false;
+      this.lastRestoreTime = 0;
+      this.restoreCooldownMs = 300;
+
+      // Bound event listeners
+      this._onRateChange = this.handleRateChange.bind(this);
+      this._onEnded = this.handleEnded.bind(this);
+      this._onTimeUpdate = this.handleTimeUpdate.bind(this);
+      this._onPlay = () => { this.playing = true; };
+      this._onPause = () => { this.playing = false; };
+
+      this.init();
+    }
+
+    init() {
+      if (this.initialized) return;
+      this.initialized = true;
+
+      console.log('[CoursePilot][LinkedIn] Video detected');
+
+      // Attach event listeners
+      this.video.addEventListener('ratechange', this._onRateChange);
+      this.video.addEventListener('ended', this._onEnded);
+      this.video.addEventListener('timeupdate', this._onTimeUpdate);
+      this.video.addEventListener('play', this._onPlay);
+      this.video.addEventListener('pause', this._onPause);
+
+      // Mute video
+      this.video.muted = true;
+      this.video.defaultMuted = true;
+      try { this.video.volume = 0; } catch (e) {}
+
+      // Apply requested rate
+      console.log(`[CoursePilot][LinkedIn] Requested speed: ${this.requestedRate}x`);
+      try {
+        this.video.playbackRate = this.requestedRate;
+      } catch (err) {
+        console.warn('[CoursePilot][LinkedIn] Could not set playbackRate:', err);
       }
-    });
+      this.effectiveRate = this.video.playbackRate;
+      console.log(`[CoursePilot][LinkedIn] Effective speed: ${this.effectiveRate}x`);
+
+      // Start natural playback
+      if (this.video.paused) {
+        this.video.play()
+          .then(() => {
+            this.playing = true;
+            console.log('[CoursePilot][LinkedIn] Playback started');
+          })
+          .catch(() => {});
+      } else {
+        this.playing = true;
+        console.log('[CoursePilot][LinkedIn] Playback started');
+      }
+
+      const details = getPageDetails();
+      logToPopup(`▶ ${details.lessonTitle}: Playing (${this.effectiveRate}x, native)...`, 'info');
+    }
+
+    setSpeed(newRate) {
+      this.requestedRate = Number(newRate) || 100;
+      console.log(`[CoursePilot][LinkedIn] Requested speed: ${this.requestedRate}x`);
+      try {
+        this.video.playbackRate = this.requestedRate;
+      } catch (err) {}
+      this.effectiveRate = this.video.playbackRate;
+      console.log(`[CoursePilot][LinkedIn] Effective speed: ${this.effectiveRate}x`);
+      const details = getPageDetails();
+      logToPopup(`⚡ Speed: ${this.effectiveRate}x`, 'info');
+    }
+
+    handleRateChange() {
+      if (!this.initialized || this.completed) return;
+      const currentRate = this.video.playbackRate;
+
+      // If LinkedIn or the player reset the speed away from our effective rate
+      if (Math.abs(currentRate - this.effectiveRate) > 0.05) {
+        const now = Date.now();
+        if (now - this.lastRestoreTime > this.restoreCooldownMs) {
+          this.lastRestoreTime = now;
+          console.log('[CoursePilot][LinkedIn] Rate reset detected');
+          try {
+            this.video.playbackRate = this.requestedRate;
+            this.effectiveRate = this.video.playbackRate;
+            console.log(`[CoursePilot][LinkedIn] Rate restored: ${this.effectiveRate}x`);
+          } catch (e) {}
+        }
+      }
+    }
+
+    handleTimeUpdate() {
+      if (!this.initialized || this.completed) return;
+      this.checkCompletion();
+    }
+
+    handleEnded() {
+      if (!this.initialized || this.completed) return;
+      this.checkCompletion();
+    }
+
+    checkCompletion() {
+      if (this.completed || !this.initialized) return;
+
+      const v = this.video;
+      const duration = v.duration;
+      if (isNaN(duration) || duration <= 0) return;
+
+      const isEnded = v.ended || v.currentTime >= Math.max(0, duration - 0.5);
+      const isTocComplete = isCurrentLessonCompletedOnLinkedIn();
+
+      if (isEnded || isTocComplete) {
+        this.completed = true;
+        console.log('[CoursePilot][LinkedIn] Lesson completed');
+        const details = getPageDetails();
+        logToPopup(`✓ ${details.lessonTitle}: Completed (${this.effectiveRate}x)`, 'success');
+        this.advance();
+      }
+    }
+
+    advance() {
+      if (this.advancing) return;
+      this.advancing = true;
+      console.log('[CoursePilot][LinkedIn] Advancing to next lesson');
+      advanceToNextTopic();
+    }
+
+    destroy() {
+      this.initialized = false;
+      this.playing = false;
+      try {
+        this.video.removeEventListener('ratechange', this._onRateChange);
+        this.video.removeEventListener('ended', this._onEnded);
+        this.video.removeEventListener('timeupdate', this._onTimeUpdate);
+        this.video.removeEventListener('play', this._onPlay);
+        this.video.removeEventListener('pause', this._onPause);
+      } catch (e) {}
+    }
   }
 
-  /**
-   * Diagnostic Observer for LinkedIn Learning
-   * Main-world network hooks are active in injected.js.
-   */
-  function installLinkedInDiagnosticObserver() {
-    ensureMainWorldBridge();
+  function installLinkedInVideoObserver() {
+    if (!isLinkedIn || window.__coursepilot_observer_installed) return;
+    window.__coursepilot_observer_installed = true;
+
+    const observer = new MutationObserver((mutations) => {
+      let foundVideo = false;
+      for (const m of mutations) {
+        for (const node of m.addedNodes) {
+          if (node.nodeType === 1) {
+            if (node.tagName === 'VIDEO' || node.querySelector?.('video')) {
+              foundVideo = true;
+              break;
+            }
+          }
+        }
+        if (foundVideo) break;
+      }
+      if (foundVideo && isRunning && !isPausedForUser) {
+        automationTick();
+      }
+    });
+
+    observer.observe(document.body, { childList: true, subtree: true });
   }
 
   /**
@@ -617,7 +748,40 @@
 
       const currentKey = getVideoIdentifier(video);
 
-      // 4. If this is a new video, reset per-video flags
+      // ---------------------------------------------------------
+      // LinkedIn Learning: Dedicated Native High-Speed Controller
+      // (Video Speed Controller Architecture)
+      // ---------------------------------------------------------
+      if (isLinkedIn) {
+        installLinkedInVideoObserver();
+
+        let controller = linkedInControllers.get(video);
+        if (!controller || controller !== currentLinkedInController || currentKey !== activeVideoKey) {
+          if (currentLinkedInController) {
+            currentLinkedInController.destroy();
+            currentLinkedInController = null;
+          }
+
+          activeVideoKey = currentKey;
+          console.log('[CoursePilot][LinkedIn] New video detected');
+          controller = new LinkedInPlaybackController(video, linkedInPlaybackRate);
+          linkedInControllers.set(video, controller);
+          currentLinkedInController = controller;
+          syncStateToStorage();
+          return;
+        }
+
+        // Active controller already managing video: check completion or natural resume
+        controller.checkCompletion();
+        if (video.paused && !video.ended && !controller.completed) {
+          video.play().catch(() => {});
+        }
+        return;
+      }
+
+      // ---------------------------------------------------------
+      // Coursera & L&T EduTech: Preserved Fast-Forward Engine
+      // ---------------------------------------------------------
       if (currentKey !== activeVideoKey) {
         activeVideoKey = currentKey;
         hasSeekedCurrentVideo = false;
@@ -626,7 +790,6 @@
         syncStateToStorage();
       }
 
-      // 5. THE VIDEO SKIPPER: Fast-forward directly to near end
       const targetTime = Math.max(0, duration - seekOffset);
 
       if (!hasSeekedCurrentVideo && video.currentTime < targetTime - 0.5) {
@@ -634,14 +797,7 @@
           video.muted = true;
           video.defaultMuted = true;
           try { video.volume = 0; } catch (e) {}
-
-          const effectiveRate = isLinkedIn
-            ? Math.min(16.0, Math.max(1.0, linkedInPlaybackRate || 16.0))
-            : 16.0;
-
-          try {
-            video.playbackRate = effectiveRate;
-          } catch (e) {}
+          try { video.playbackRate = 16.0; } catch (e) {}
 
           video.currentTime = targetTime;
           video.dispatchEvent(new Event('seeking', { bubbles: true }));
@@ -666,7 +822,7 @@
 
       // 6. Check Completion
       const isNaturalEnd = video.ended || video.currentTime >= Math.max(0, duration - 0.6);
-      const isTocCompleted = isLinkedIn ? isCurrentLessonCompletedOnLinkedIn() : isMarkedCompletedInToc();
+      const isTocCompleted = isMarkedCompletedInToc();
 
       if (hasSeekedCurrentVideo && (isNaturalEnd || isTocCompleted)) {
         if (!videoCompletedTimestamp) {
@@ -674,7 +830,7 @@
         }
 
         const elapsedSinceEnd = Date.now() - videoCompletedTimestamp;
-        const requiredWait = isTocCompleted ? 400 : (isLinkedIn ? 800 : 2500);
+        const requiredWait = isTocCompleted ? 400 : 2500;
 
         if (elapsedSinceEnd >= requiredWait) {
           if (lastCompletedVideoKey !== currentKey) {
@@ -797,7 +953,7 @@
       if (currentIdx >= 0) {
         if (currentIdx === lessons.length - 1) {
           logToPopup('🎉 Course completed! Reached the final lesson.', 'success');
-          linkedInState.advancing = false;
+          if (currentLinkedInController) currentLinkedInController.advancing = false;
           return;
         }
         linkedInNextTarget = lessons[currentIdx + 1];

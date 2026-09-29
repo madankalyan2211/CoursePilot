@@ -38,7 +38,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function updateSpeedUi(speed) {
-    const num = Number(speed) || 4;
+    const num = Number(speed) || 100;
     speedButtons.forEach(btn => {
       const btnSpeed = Number(btn.getAttribute('data-speed'));
       if (btnSpeed === num) {
@@ -48,21 +48,16 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
     if (speedCurrentBadge) {
-      if (num >= 32) {
-        speedCurrentBadge.innerText = '16x (Max)';
-      } else {
-        speedCurrentBadge.innerText = `${num}x`;
-      }
+      speedCurrentBadge.innerText = `${num}x`;
     }
   }
 
   speedButtons.forEach(btn => {
     btn.addEventListener('click', () => {
-      const speed = Number(btn.getAttribute('data-speed')) || 4;
+      const speed = Number(btn.getAttribute('data-speed')) || 100;
       updateSpeedUi(speed);
       chrome.storage.local.set({ linkedInPlaybackRate: speed });
-      const displaySpeed = speed >= 32 ? '16x (Chromium Hardware Max)' : `${speed}x`;
-      addLog(`⚡ Speed set to ${displaySpeed}`, 'info');
+      addLog(`⚡ Speed set to ${speed}x`, 'info');
     });
   });
 
@@ -89,7 +84,7 @@ document.addEventListener('DOMContentLoaded', () => {
   chrome.storage.local.get(['hasStarred', 'activeCourseState', 'isRunning', 'linkedInPlaybackRate'], (res) => {
     hasStarred = Boolean(res.hasStarred);
     updateStarBadgeUi();
-    const storedSpeed = Number(res.linkedInPlaybackRate) || 4;
+    const storedSpeed = Number(res.linkedInPlaybackRate) || 100;
     updateSpeedUi(storedSpeed);
     if (!hasStarred) {
       starGateModal.style.display = 'flex';

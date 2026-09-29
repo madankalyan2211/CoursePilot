@@ -380,18 +380,14 @@
   function isCurrentLessonCompletedOnLinkedIn() {
     const activeItem = getActiveLinkedInTocItem();
     if (activeItem) {
-      const hasCircle = Boolean(activeItem.querySelector('svg[data-test-icon="circle-small"], svg[data-test-icon="circle-medium"], svg[data-test-icon*="circle" i], .classroom-toc-item--in-progress'));
-      const hasCheck = Boolean(activeItem.querySelector('svg[data-test-icon="check-small"], svg[data-test-icon="check-medium"], svg[data-test-icon*="check" i], .completed-icon'));
+      const hasCheck = Boolean(activeItem.querySelector('svg[data-test-icon*="check" i], .completed-icon, [data-test-icon="check-circle"]'));
       const hasCompletedClass = activeItem.classList.contains('classroom-toc-item--completed') ||
                                 activeItem.classList.contains('completed') ||
                                 activeItem.classList.contains('classroom-sidebar__item--completed') ||
                                 activeItem.hasAttribute('data-test-toc-item-completed');
-
-      // Strictly verified: checkmark is present AND in-progress circle is absent
-      if ((hasCheck || hasCompletedClass) && !hasCircle) {
+      if (hasCheck || hasCompletedClass) {
         return true;
       }
-      return false;
     }
 
     // Fallback: check matching URL TOC links
@@ -403,14 +399,12 @@
         if (p && p === currentPath) {
           const parent = a.closest('li') || a.closest('.classroom-toc-item') || a.closest('.classroom-sidebar__item') || a.parentElement;
           if (parent) {
-            const hasCircle = Boolean(parent.querySelector('svg[data-test-icon="circle-small"], svg[data-test-icon="circle-medium"], svg[data-test-icon*="circle" i], .classroom-toc-item--in-progress'));
-            const hasCheck = Boolean(parent.querySelector('svg[data-test-icon="check-small"], svg[data-test-icon="check-medium"], svg[data-test-icon*="check" i], .completed-icon'));
+            const hasCheck = Boolean(parent.querySelector('svg[data-test-icon*="check" i], .completed-icon, [data-test-icon="check-circle"]'));
             const hasCompletedClass = parent.classList.contains('classroom-toc-item--completed') ||
                                       parent.classList.contains('completed') ||
                                       parent.classList.contains('classroom-sidebar__item--completed') ||
                                       parent.hasAttribute('data-test-toc-item-completed');
-
-            if ((hasCheck || hasCompletedClass) && !hasCircle) {
+            if (hasCheck || hasCompletedClass) {
               return true;
             }
           }
@@ -517,10 +511,7 @@
   }
 
   function getVideoIdentifier(video) {
-    const details = getPageDetails();
-    const url = normalizeUrl(window.location.href);
-    const src = video?.currentSrc || video?.src || '';
-    return `${url}::${details.lessonTitle}::${src}`;
+    return normalizeUrl(window.location.href);
   }
 
   function startAutomationEngine() {
@@ -537,39 +528,12 @@
   }
 
   /**
-   * Main World Bridge Helper
-   * Injects injected.js via external src (chrome-extension:// URL) if not already loaded by manifest.
-   * Complies 100% with LinkedIn's Content Security Policy.
-   */
-  function ensureMainWorldBridge() {
-    if (document.documentElement?.getAttribute('data-coursepilot-main-installed') === 'true') {
-      return;
-    }
-    if (window.__coursepilot_bridge_loaded) return;
-    try {
-      if (!document.querySelector('script[data-coursepilot-injected]')) {
-        const script = document.createElement('script');
-        script.src = chrome.runtime.getURL('injected.js');
-        script.setAttribute('data-coursepilot-injected', 'true');
-        script.onload = () => {
-          window.__coursepilot_bridge_loaded = true;
-          try { document.documentElement.setAttribute('data-coursepilot-main-installed', 'true'); } catch(e) {}
-          script.remove();
-        };
-        (document.head || document.documentElement).appendChild(script);
-      }
-    } catch (e) {}
-  }
-
-  /**
    * LinkedIn Accelerated Playback
    * Sets video playbackRate cleanly on HTML5 media elements.
    * Completely CSP-compliant: zero inline script tags, zero monkey-patching of Video.js.
    */
   function applyLinkedInNativePlayback(rate = 4.0) {
     const safeRate = Math.min(16.0, Math.max(0.5, Number(rate) || 4.0));
-    ensureMainWorldBridge();
-
     const vids = document.querySelectorAll('video');
     vids.forEach(v => {
       if (!v) return;
@@ -702,55 +666,27 @@
           try { video.playbackRate = effectiveRate; } catch (e) {}
         }
 
-        if (video.paused && !video.ended && !linkedInState.completionDetected && video.readyState >= 2) {
-          video.play().catch(() => {});
-        }
+        // Step C: Check completion (TOC green checkmark or video reached end)
+        const isEnded = video.ended || (duration > 0 && video.currentTime >= duration - 0.6);
+        const isCompletedInToc = isCurrentLessonCompletedOnLinkedIn();
 
-        // Step C: Monitor genuine watched time
-        const progressRatio = duration > 0 ? (video.currentTime / duration) : 0;
-        if (!linkedInState.targetReached && progressRatio >= LINKEDIN_COMPLETION_TARGET) {
-          linkedInState.targetReached = true;
-          linkedInState.targetReachedTimestamp = Date.now();
-          linkedInState.waitStartTime = Date.now();
-          const percentStr = `${Math.round(LINKEDIN_COMPLETION_TARGET * 100)}%`;
-          console.log(`[CoursePilot][LinkedIn] watched target reached: ${percentStr}`);
-          console.log('[CoursePilot][LinkedIn] waiting for LinkedIn completion state');
-          const details = getPageDetails();
-          logToPopup(`⏳ ${details.lessonTitle}: Reached ${percentStr} watched target — waiting for LinkedIn completion state...`, 'info');
-        }
-
-        // Step D: Verify LinkedIn's own completion state (green checkmark on active lesson)
-        const isCurrentLessonCompleted = isCurrentLessonCompletedOnLinkedIn();
-
-        if (isCurrentLessonCompleted) {
+        if (isCompletedInToc || isEnded) {
           if (!linkedInState.completionDetected) {
             linkedInState.completionDetected = true;
-            console.log('[CoursePilot][LinkedIn] green check detected');
+            linkedInState.waitStartTime = Date.now();
             const details = getPageDetails();
-            logToPopup(`✓ ${details.lessonTitle}: Green check detected!`, 'success');
+            logToPopup(`✓ ${details.lessonTitle}: Completed! Advancing...`, 'success');
           }
 
           if (!linkedInState.advancing) {
-            linkedInState.advancing = true;
-            console.log('[CoursePilot][LinkedIn] advancing to next lesson');
-            lastCompletedVideoKey = currentKey;
-            lastAdvanceTime = Date.now();
-            advanceToNextTopic();
-          }
-          return;
-        }
-
-        // Step E: If target reached or video naturally ended, wait for LinkedIn to update
-        if (linkedInState.targetReached || video.ended || video.currentTime >= duration - 0.5) {
-          const elapsedWait = Date.now() - (linkedInState.waitStartTime || Date.now());
-          if (elapsedWait > LINKEDIN_COMPLETION_WAIT_TIMEOUT_MS) {
-            if (!linkedInState.loggedTimeout) {
-              linkedInState.loggedTimeout = true;
-              console.warn('[CoursePilot][LinkedIn] completion not confirmed');
-              logToPopup(`[LinkedIn] Completion not confirmed yet — waiting for green check...`, 'warning');
+            const elapsed = Date.now() - (linkedInState.waitStartTime || Date.now());
+            if (elapsed >= 1000 || isCompletedInToc) {
+              linkedInState.advancing = true;
+              lastCompletedVideoKey = currentKey;
+              lastAdvanceTime = Date.now();
+              advanceToNextTopic();
             }
           }
-          // Do NOT advance! Continue waiting for LinkedIn tracking
           return;
         }
 

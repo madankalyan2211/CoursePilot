@@ -41,6 +41,7 @@
         "*://*.coursera.org/*",
         "*://*.lntedutech.com/*"
       ],
+      "all_frames": true,
       "js": ["injected.js"],
       "world": "MAIN",
       "run_at": "document_start"
@@ -51,6 +52,7 @@
         "*://*.coursera.org/*",
         "*://*.lntedutech.com/*"
       ],
+      "all_frames": true,
       "js": ["content.js"],
       "run_at": "document_idle"
     }

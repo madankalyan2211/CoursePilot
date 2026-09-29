@@ -39,6 +39,10 @@
     if (res.linkedInPlaybackRate) {
       linkedInPlaybackRate = Number(res.linkedInPlaybackRate) || LINKEDIN_PLAYBACK_RATE_DEFAULT;
     }
+    if (isLinkedIn) {
+      installLinkedInVideoObserver();
+      applySpeedGlobally(linkedInPlaybackRate);
+    }
     if (isRunning) {
       startAutomationEngine();
     }
@@ -110,15 +114,8 @@
   chrome.storage.onChanged?.addListener((changes, areaName) => {
     if (areaName === 'local') {
       if (changes.linkedInPlaybackRate) {
-        linkedInPlaybackRate = Number(changes.linkedInPlaybackRate.newValue) || LINKEDIN_PLAYBACK_RATE_DEFAULT;
-        if (isLinkedIn) {
-          if (currentLinkedInController) {
-            currentLinkedInController.setSpeed(linkedInPlaybackRate);
-          } else if (typeof ensureLinkedInController === 'function') {
-            const c = ensureLinkedInController();
-            if (c) c.setSpeed(linkedInPlaybackRate);
-          }
-        }
+        const newSpeed = Number(changes.linkedInPlaybackRate.newValue) || LINKEDIN_PLAYBACK_RATE_DEFAULT;
+        applySpeedGlobally(newSpeed);
       }
       if (changes.actionTrigger) {
         const action = changes.actionTrigger.newValue;
@@ -145,16 +142,9 @@
       syncStateToStorage();
       sendResponse(details);
     } else if (request.action === 'SET_LINKEDIN_SPEED') {
-      linkedInPlaybackRate = Number(request.speed) || LINKEDIN_PLAYBACK_RATE_DEFAULT;
-      if (isLinkedIn) {
-        if (currentLinkedInController) {
-          currentLinkedInController.setSpeed(linkedInPlaybackRate);
-        } else if (typeof ensureLinkedInController === 'function') {
-          const c = ensureLinkedInController();
-          if (c) c.setSpeed(linkedInPlaybackRate);
-        }
-      }
-      sendResponse({ status: 'SPEED_UPDATED', speed: linkedInPlaybackRate });
+      const newSpeed = Number(request.speed) || LINKEDIN_PLAYBACK_RATE_DEFAULT;
+      applySpeedGlobally(newSpeed);
+      sendResponse({ status: 'SPEED_UPDATED', speed: newSpeed });
     }
     return true;
   });
@@ -469,6 +459,27 @@
     return false;
   }
 
+  function findAllVideos(root = document) {
+    let list = [];
+    try {
+      const direct = root.querySelectorAll('video');
+      for (let i = 0; i < direct.length; i++) {
+        list.push(direct[i]);
+      }
+    } catch (e) {}
+
+    try {
+      const all = root.querySelectorAll('*');
+      for (let i = 0; i < all.length; i++) {
+        if (all[i].shadowRoot) {
+          list.push(...findAllVideos(all[i].shadowRoot));
+        }
+      }
+    } catch (e) {}
+
+    return list;
+  }
+
   function findActiveVideoElement() {
     // 1. Resilient container-scoped lookup (LinkedIn classroom player / Coursera video player)
     const videoContainerSelectors = [
@@ -482,7 +493,7 @@
 
     for (const sel of videoContainerSelectors) {
       const v = document.querySelector(sel);
-      if (v && !isNaN(v.duration) && v.duration > 0 && (v.offsetWidth > 0 || v.offsetHeight > 0 || v.readyState >= 1)) {
+      if (v && (v.offsetWidth > 0 || v.offsetHeight > 0 || v.readyState >= 1 || (!isNaN(v.duration) && v.duration > 0))) {
         return v;
       }
     }
@@ -498,12 +509,21 @@
     for (const sel of videoSelectors) {
       const videos = document.querySelectorAll(sel);
       for (const v of videos) {
-        if (v && (v.offsetWidth > 0 || v.offsetHeight > 0 || !isNaN(v.duration))) {
+        if (v && (v.offsetWidth > 0 || v.offsetHeight > 0 || v.readyState >= 1 || !isNaN(v.duration))) {
           return v;
         }
       }
     }
-    return null;
+
+    // 3. Fallback: Search all videos across document and Shadow DOMs
+    const allVideos = findAllVideos(document);
+    for (const v of allVideos) {
+      if (v && (!v.paused || v.currentTime > 0 || v.readyState >= 1 || (v.offsetWidth > 0 && v.offsetHeight > 0))) {
+        return v;
+      }
+    }
+
+    return allVideos.length > 0 ? allVideos[0] : null;
   }
 
   function getVideoIdentifier(video) {
@@ -842,6 +862,67 @@
 
     observer.observe(document.body, { childList: true, subtree: true });
   }
+
+  function applySpeedGlobally(speed) {
+    const targetRate = Number(speed) || linkedInPlaybackRate || 100;
+    const safeRate = Math.min(16.0, Math.max(0.0625, targetRate));
+    linkedInPlaybackRate = targetRate;
+
+    const videos = findAllVideos(document);
+    videos.forEach((v) => {
+      try {
+        vscArbitration.noteWrite(v, safeRate, { suppressPropagation: true });
+        v.playbackRate = safeRate;
+        v.defaultPlaybackRate = safeRate;
+      } catch (e) {}
+    });
+
+    if (isLinkedIn) {
+      if (currentLinkedInController) {
+        currentLinkedInController.setSpeed(targetRate);
+      } else {
+        const c = ensureLinkedInController();
+        if (c) c.setSpeed(targetRate);
+      }
+    }
+
+    try {
+      window.dispatchEvent(new CustomEvent('__coursepilot_set_speed', { detail: { speed: targetRate } }));
+      document.dispatchEvent(new CustomEvent('__coursepilot_set_speed', { detail: { speed: targetRate } }));
+    } catch (e) {}
+  }
+
+  // Video Speed Controller keyboard shortcuts (S: slower, D: faster, R: reset 1x, G: 16x/100x)
+  window.addEventListener('keydown', (e) => {
+    if (!isLinkedIn) return;
+    const activeEl = document.activeElement;
+    if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.isContentEditable)) {
+      return;
+    }
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+    if (e.key === 'd' || e.key === 'D') {
+      const current = linkedInPlaybackRate || 1.0;
+      let next = current >= 16 ? 16 : (current >= 4 ? current + 2 : current + 0.5);
+      applySpeedGlobally(next);
+      chrome.storage.local.set({ linkedInPlaybackRate: next });
+      logToPopup(`⚡ Speed increased: ${next}x`, 'info');
+    } else if (e.key === 's' || e.key === 'S') {
+      const current = linkedInPlaybackRate || 1.0;
+      let next = Math.max(0.5, current >= 4 ? current - 2 : current - 0.5);
+      applySpeedGlobally(next);
+      chrome.storage.local.set({ linkedInPlaybackRate: next });
+      logToPopup(`⚡ Speed decreased: ${next}x`, 'info');
+    } else if (e.key === 'r' || e.key === 'R') {
+      applySpeedGlobally(1.0);
+      chrome.storage.local.set({ linkedInPlaybackRate: 1.0 });
+      logToPopup('⚡ Speed reset to 1.0x', 'info');
+    } else if (e.key === 'g' || e.key === 'G') {
+      applySpeedGlobally(100.0);
+      chrome.storage.local.set({ linkedInPlaybackRate: 100.0 });
+      logToPopup('⚡ Speed set to 100x (clamped to 16x)', 'info');
+    }
+  });
 
   /**
    * Fast-forward helper preserved for Coursera & L&T EduTech

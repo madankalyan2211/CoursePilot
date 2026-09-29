@@ -52,22 +52,100 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  function broadcastSpeedToTab(tabId, speed) {
+    if (!tabId) return;
+    chrome.tabs.sendMessage(tabId, { action: 'SET_LINKEDIN_SPEED', speed }).catch(() => {});
+    if (chrome.scripting) {
+      // 1. Execute in MAIN world to directly control HTMLMediaElement and Video.js instance
+      chrome.scripting.executeScript({
+        target: { tabId, allFrames: true },
+        world: 'MAIN',
+        func: (rate) => {
+          function findVideos(root = document) {
+            let list = [];
+            try { list.push(...root.querySelectorAll('video')); } catch (e) {}
+            try {
+              const all = root.querySelectorAll('*');
+              for (let i = 0; i < all.length; i++) {
+                if (all[i].shadowRoot) list.push(...findVideos(all[i].shadowRoot));
+              }
+            } catch (e) {}
+            return list;
+          }
+          const safeRate = Math.min(16.0, Math.max(0.0625, rate));
+          window.__coursepilot_desired_speed = safeRate;
+          findVideos(document).forEach((v) => {
+            try {
+              v.playbackRate = safeRate;
+              v.defaultPlaybackRate = safeRate;
+              if (v.player && typeof v.player.playbackRate === 'function') {
+                v.player.playbackRate(safeRate);
+              }
+            } catch (e) {}
+          });
+          window.dispatchEvent(new CustomEvent('__coursepilot_set_speed', { detail: { speed: rate } }));
+          document.dispatchEvent(new CustomEvent('__coursepilot_set_speed', { detail: { speed: rate } }));
+        },
+        args: [speed]
+      }).catch(() => {});
+
+      // 2. Also execute in ISOLATED world
+      chrome.scripting.executeScript({
+        target: { tabId, allFrames: true },
+        func: (rate) => {
+          function findVideos(root = document) {
+            let list = [];
+            try { list.push(...root.querySelectorAll('video')); } catch (e) {}
+            try {
+              const all = root.querySelectorAll('*');
+              for (let i = 0; i < all.length; i++) {
+                if (all[i].shadowRoot) list.push(...findVideos(all[i].shadowRoot));
+              }
+            } catch (e) {}
+            return list;
+          }
+          const safeRate = Math.min(16.0, Math.max(0.0625, rate));
+          findVideos(document).forEach((v) => {
+            try {
+              v.playbackRate = safeRate;
+              v.defaultPlaybackRate = safeRate;
+            } catch (e) {}
+          });
+          window.dispatchEvent(new CustomEvent('__coursepilot_set_speed', { detail: { speed: rate } }));
+          document.dispatchEvent(new CustomEvent('__coursepilot_set_speed', { detail: { speed: rate } }));
+        },
+        args: [speed]
+      }).catch(() => {});
+    }
+  }
+
+  function broadcastSpeed(speed) {
+    if (targetTabId) {
+      broadcastSpeedToTab(targetTabId, speed);
+    }
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (tabs && tabs[0]?.id && tabs[0].id !== targetTabId) {
+        broadcastSpeedToTab(tabs[0].id, speed);
+      }
+    });
+    chrome.tabs.query({ url: ["*://*.linkedin.com/*", "*://*.coursera.org/*", "*://*.lntedutech.com/*"] }, (tabs) => {
+      if (tabs) {
+        tabs.forEach((t) => {
+          if (t.id && t.id !== targetTabId) {
+            broadcastSpeedToTab(t.id, speed);
+          }
+        });
+      }
+    });
+  }
+
   speedButtons.forEach(btn => {
     btn.addEventListener('click', () => {
       const speed = Number(btn.getAttribute('data-speed')) || 100;
       updateSpeedUi(speed);
       chrome.storage.local.set({ linkedInPlaybackRate: speed });
       addLog(`⚡ Speed set to ${speed}x`, 'info');
-
-      // Send immediate direct message to active tab for zero-latency response
-      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-        if (tabs && tabs[0]?.id) {
-          chrome.tabs.sendMessage(tabs[0].id, {
-            action: 'SET_LINKEDIN_SPEED',
-            speed: speed
-          }).catch(() => {});
-        }
-      });
+      broadcastSpeed(speed);
     });
   });
 

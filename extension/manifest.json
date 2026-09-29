@@ -41,8 +41,28 @@
         "*://*.coursera.org/*",
         "*://*.lntedutech.com/*"
       ],
+      "js": ["injected.js"],
+      "world": "MAIN",
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "*://*.linkedin.com/*",
+        "*://*.coursera.org/*",
+        "*://*.lntedutech.com/*"
+      ],
       "js": ["content.js"],
       "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["injected.js", "icons/*"],
+      "matches": [
+        "*://*.linkedin.com/*",
+        "*://*.coursera.org/*",
+        "*://*.lntedutech.com/*"
+      ]
     }
   ]
 }

@@ -529,224 +529,97 @@
   }
 
   /**
-   * Executes a function directly in the Page (Main) World context
-   * Required to hook into LinkedIn's window.videojs and internal player state
+   * Main World Bridge Helper
+   * Injects injected.js via external src (chrome-extension:// URL) if not already loaded by manifest.
+   * Complies 100% with LinkedIn's Content Security Policy.
    */
-  function executeInPageContext(codeStr) {
+  function ensureMainWorldBridge() {
+    if (document.documentElement?.getAttribute('data-coursepilot-main-installed') === 'true') {
+      return;
+    }
+    if (window.__coursepilot_bridge_loaded) return;
     try {
-      const script = document.createElement('script');
-      script.textContent = `(function() {
-        try {
-          ${codeStr}
-        } catch(e) {}
-      })();`;
-      (document.head || document.documentElement).appendChild(script);
-      script.remove();
+      if (!document.querySelector('script[data-coursepilot-injected]')) {
+        const script = document.createElement('script');
+        script.src = chrome.runtime.getURL('injected.js');
+        script.setAttribute('data-coursepilot-injected', 'true');
+        script.onload = () => {
+          window.__coursepilot_bridge_loaded = true;
+          try { document.documentElement.setAttribute('data-coursepilot-main-installed', 'true'); } catch(e) {}
+          script.remove();
+        };
+        (document.head || document.documentElement).appendChild(script);
+      }
     } catch (e) {}
   }
 
   /**
-   * LinkedIn Main-World Injection: Genuine Native Playback
-   * Uses Video.js and native video APIs to start playback at accelerated rate (default 4x, muted).
-   * Does NOT seek, does NOT dispatch synthetic events, allowing LinkedIn telemetry to observe genuine watch time.
-   */
-  /**
-   * LinkedIn Main-World Injection: Genuine Native Accelerated Playback
-   * Sets and locks the HTML5 video and Video.js player instances to the target speed.
-   * Clamped to 16.0 (Chromium's maximum supported rate).
-   * Automatically disables audio bottlenecks and enforces low-bitrate stream quality (360p)
-   * to eliminate frame dropping and buffering stalls.
+   * LinkedIn Accelerated Playback
+   * Controls DOM video directly and coordinates with main-world injected.js
+   * for Video.js configuration, speed-locking, and lowest-bitrate (360p) streaming.
+   * Completely CSP-compliant: zero inline script tags.
    */
   function applyLinkedInNativePlayback(rate = 4.0) {
     const safeRate = Math.min(16.0, Math.max(0.5, Number(rate) || 4.0));
-    executeInPageContext(`
-      (function() {
-        const targetRate = ${safeRate};
+    ensureMainWorldBridge();
 
-        // 1. Force Video.js player instances to accept and lock targetRate
-        if (window.videojs) {
-          try {
-            const players = window.videojs.getPlayers ? window.videojs.getPlayers() : window.videojs.players;
-            if (players) {
-              for (const key in players) {
-                const p = players[key];
-                if (p) {
-                  try { p.muted(true); } catch(e) {}
-                  try { p.volume(0); } catch(e) {}
-
-                  // Allow Video.js to accept rates up to 16x without rejecting
-                  if (p.options_) {
-                    p.options_.playbackRates = [0.5, 1, 2, 4, 6, 8, 12, 16];
-                  }
-                  if (typeof p.playbackRates === 'function') {
-                    try { p.playbackRates([0.5, 1, 2, 4, 6, 8, 12, 16]); } catch(e) {}
-                  }
-                  if (typeof p.playbackRate === 'function') {
-                    try { p.playbackRate(targetRate); } catch(e) {}
-                  }
-                  if (p.tech_ && typeof p.tech_.setPlaybackRate === 'function') {
-                    try { p.tech_.setPlaybackRate(targetRate); } catch(e) {}
-                  }
-
-                  // Force lowest video quality level (360p) so network and decoder sustain 16x smoothly
-                  if (p.qualityLevels) {
-                    try {
-                      const ql = p.qualityLevels();
-                      if (ql && ql.length > 0) {
-                        for (let i = 0; i < ql.length; i++) {
-                          ql[i].enabled = (i === 0);
-                        }
-                      }
-                    } catch(e) {}
-                  }
-
-                  if (typeof p.play === 'function') {
-                    try { p.play(); } catch(e) {}
-                  }
-                }
-              }
-            }
-          } catch(e) {}
+    // 1. Direct DOM manipulation in content script context
+    const vids = document.querySelectorAll('video');
+    vids.forEach(v => {
+      if (!v) return;
+      v.muted = true;
+      v.defaultMuted = true;
+      try { v.volume = 0; } catch(e) {}
+      try {
+        const setter = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'playbackRate')?.set;
+        if (setter) {
+          setter.call(v, safeRate);
+        } else {
+          v.playbackRate = safeRate;
         }
+      } catch (e) {
+        try { v.playbackRate = safeRate; } catch(e2) {}
+      }
+      if (v.paused && v.duration > 0) {
+        v.play().catch(() => {});
+      }
+    });
 
-        // 2. Configure and lock native HTML5 video elements
-        const vids = document.querySelectorAll('video');
-        vids.forEach(v => {
-          if (!v) return;
-          v.muted = true;
-          v.defaultMuted = true;
-          try { v.volume = 0; } catch(e) {}
-
-          // Disable audio tracks to eliminate Chromium AudioRenderer throttling at >4x
-          try {
-            if (v.audioTracks) {
-              for (let i = 0; i < v.audioTracks.length; i++) {
-                v.audioTracks[i].enabled = false;
-              }
-            }
-          } catch(e) {}
-
-          // Directly invoke native setter on HTMLMediaElement prototype
-          try {
-            const setter = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'playbackRate')?.set;
-            if (setter) {
-              setter.call(v, targetRate);
-            } else {
-              v.playbackRate = targetRate;
-            }
-          } catch(e) {
-            try { v.playbackRate = targetRate; } catch(e2) {}
-          }
-
-          // Enforce target rate: prevent LinkedIn or Video.js from resetting speed on ratechange
-          if (!v._coursepilot_rate_locked) {
-            v._coursepilot_rate_locked = true;
-            v.addEventListener('ratechange', function() {
-              const desired = window.__coursepilot_target_rate || targetRate;
-              if (Math.abs(v.playbackRate - desired) > 0.05 && desired <= 16.0) {
-                try {
-                  const s = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'playbackRate')?.set;
-                  if (s) s.call(v, desired);
-                  else v.playbackRate = desired;
-                } catch(e) {}
-              }
-            }, true);
-          }
-          window.__coursepilot_target_rate = targetRate;
-
-          if (v.paused && v.duration > 0) {
-            v.play().catch(() => {});
-          }
-        });
-      })();
-    `);
+    // 2. Message main-world script to unlock Video.js and lock target rate
+    window.postMessage({
+      source: 'coursepilot_extension',
+      action: 'APPLY_PLAYBACK_RATE',
+      rate: safeRate
+    }, '*');
   }
 
   /**
-   * Read-only Diagnostic Observer for LinkedIn Learning
-   * Listens for clientReportedContentStateChangeActions GraphQL operation.
-   * Completely read-only: does not modify, intercept, replay, forge, or replace requests.
+   * Diagnostic Observer for LinkedIn Learning
+   * Main-world network hooks are active in injected.js.
    */
-  let isLinkedInObserverInstalled = false;
   function installLinkedInDiagnosticObserver() {
-    if (isLinkedInObserverInstalled || !isLinkedIn) return;
-    isLinkedInObserverInstalled = true;
-
-    executeInPageContext(`
-      (function() {
-        if (window.__coursepilot_observer_installed) return;
-        window.__coursepilot_observer_installed = true;
-
-        function checkGraphQLBody(url, body) {
-          try {
-            if (!body || typeof body !== 'string') return;
-            if (body.includes('clientReportedContentStateChangeActions') || (url && url.includes('clientReportedContentStateChangeActions'))) {
-              let parsed = null;
-              try { parsed = JSON.parse(body); } catch(e) {}
-              const stateData = parsed?.variables?.clientReportedStateChangeData || parsed?.clientReportedStateChangeData;
-              if (stateData) {
-                const prev = stateData.previousClientProgressState || 'UNKNOWN';
-                const curr = stateData.currentClientProgressState || 'UNKNOWN';
-                const viewed = stateData.durationInSecsViewed || '0';
-                console.log('[CoursePilot][LinkedIn Diagnostic] GraphQL content state change:', {
-                  previousClientProgressState: prev,
-                  currentClientProgressState: curr,
-                  durationInSecsViewed: viewed
-                });
-              }
-            }
-          } catch(e) {}
-        }
-
-        // Read-only fetch hook
-        const origFetch = window.fetch;
-        if (origFetch) {
-          window.fetch = function(...args) {
-            try {
-              const url = typeof args[0] === 'string' ? args[0] : (args[0]?.url || '');
-              const body = args[1]?.body;
-              checkGraphQLBody(url, body);
-            } catch(e) {}
-            return origFetch.apply(this, args);
-          };
-        }
-
-        // Read-only XHR hook
-        const origSend = XMLHttpRequest.prototype.send;
-        XMLHttpRequest.prototype.send = function(body) {
-          try {
-            checkGraphQLBody(this._url, body);
-          } catch(e) {}
-          return origSend.apply(this, arguments);
-        };
-        const origOpen = XMLHttpRequest.prototype.open;
-        XMLHttpRequest.prototype.open = function(method, url) {
-          this._url = url;
-          return origOpen.apply(this, arguments);
-        };
-      })();
-    `);
+    ensureMainWorldBridge();
   }
 
   /**
    * Fast-forward helper preserved for Coursera & L&T EduTech
+   * Directly operates on video DOM elements without script injection.
    */
   function triggerCourseraLntFastForward(offset = 2.5) {
-    executeInPageContext(`
-      const vids = document.querySelectorAll('video');
-      vids.forEach(v => {
-        if (v && v.duration > 0) {
-          v.muted = true;
-          try { v.playbackRate = 16; } catch(e) {}
-          const target = Math.max(0, v.duration - ${offset});
-          if (v.currentTime < target) {
-            v.currentTime = target;
-          }
-          v.play().catch(() => {});
-          v.dispatchEvent(new Event('timeupdate', { bubbles: true }));
+    const vids = document.querySelectorAll('video');
+    vids.forEach(v => {
+      if (v && v.duration > 0) {
+        v.muted = true;
+        v.defaultMuted = true;
+        try { v.playbackRate = 16.0; } catch(e) {}
+        const target = Math.max(0, v.duration - offset);
+        if (v.currentTime < target) {
+          v.currentTime = target;
         }
-      });
-    `);
+        v.play().catch(() => {});
+        v.dispatchEvent(new Event('timeupdate', { bubbles: true }));
+      }
+    });
   }
 
   let videoCompletedTimestamp = 0;

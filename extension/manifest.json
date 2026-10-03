@@ -55,6 +55,27 @@
       "all_frames": true,
       "js": ["content.js"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "*://*.linkedin.com/*"
+      ],
+      "all_frames": true,
+      "match_about_blank": true,
+      "js": ["vsc/content-bridge.js"],
+      "run_at": "document_start",
+      "world": "ISOLATED"
+    },
+    {
+      "matches": [
+        "*://*.linkedin.com/*"
+      ],
+      "all_frames": true,
+      "match_about_blank": true,
+      "css": ["vsc/inject.css"],
+      "js": ["vsc/inject.js"],
+      "run_at": "document_idle",
+      "world": "MAIN"
     }
   ],
   "web_accessible_resources": [
@@ -64,6 +85,12 @@
         "*://*.linkedin.com/*",
         "*://*.coursera.org/*",
         "*://*.lntedutech.com/*"
+      ]
+    },
+    {
+      "resources": ["vsc/*"],
+      "matches": [
+        "*://*.linkedin.com/*"
       ]
     }
   ]

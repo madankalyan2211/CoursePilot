@@ -1,0 +1,43 @@
+/*
+ * inject.css — Loaded via manifest content_scripts.css (before any JS runs).
+ *
+ * Base vsc-controller rules live here for timing safety: manifest CSS is
+ * available before the first controller element is created. Site-specific
+ * overrides are in the user-editable "Controller CSS" setting
+ * (src/styles/controller-css-defaults.js), injected as a <style> by inject.js.
+ */
+vsc-controller {
+  /* Out of normal flow by default; site overrides change to relative. */
+  position: absolute;
+  /* Pin host origin so flex/grid static-positioning cannot center it. */
+  top: 0;
+  left: 0;
+  visibility: visible;
+  opacity: 1;
+  display: block;
+  width: auto !important;
+  height: auto !important;
+  white-space: normal;
+  user-select: none;
+}
+
+/* shift YT 3D controller down */
+/* e.g. https://www.youtube.com/watch?v=erftYPflJzQ */
+.ytp-webgl-spherical-control {
+  top: 60px !important;
+}
+
+.ytp-fullscreen .ytp-webgl-spherical-control {
+  top: 100px !important;
+}
+
+/* disable Vimeo video overlay */
+div.video-wrapper + div.target {
+  height: 0;
+}
+
+/* Fix black overlay on Kickstarter */
+div.video-player.has_played.vertically_center:before,
+div.legacy-video-player.has_played.vertically_center:before {
+  content: none !important;
+}

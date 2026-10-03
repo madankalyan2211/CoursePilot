@@ -74,6 +74,14 @@
         return nativeGetPlaybackRate.call(this);
       },
       set(val) {
+        if (window.__vsc_writing_rate) {
+          activeDesiredSpeed = val;
+          try {
+            document.documentElement?.setAttribute('data-coursepilot-speed', String(val));
+          } catch (e) {}
+          nativeSetPlaybackRate.call(this, val);
+          return;
+        }
         const desired = getDesiredSpeed();
         // If CoursePilot has chosen a speed and site tries to reset/clamp it (e.g. 2.0x), enforce desired speed!
         if (desired !== null && !isWritingSpeed) {
@@ -98,6 +106,14 @@
         return nativeGetDefaultPlaybackRate.call(this);
       },
       set(val) {
+        if (window.__vsc_writing_rate) {
+          activeDesiredSpeed = val;
+          try {
+            document.documentElement?.setAttribute('data-coursepilot-speed', String(val));
+          } catch (e) {}
+          nativeSetDefaultPlaybackRate.call(this, val);
+          return;
+        }
         const desired = getDesiredSpeed();
         if (desired !== null && !isWritingSpeed) {
           isWritingSpeed = true;

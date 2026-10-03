@@ -30,18 +30,25 @@ document.addEventListener('DOMContentLoaded', () => {
   const speedCurrentBadge = document.getElementById('speed-current-badge');
   const speedButtons = document.querySelectorAll('.speed-btn');
 
+  let detectedPlatform = 'linkedin';
+
   function updateSpeedControlVisibility(platformOrUrl) {
     if (!speedControlCard) return;
-    const str = String(platformOrUrl || '').toLowerCase();
-    const isLinkedIn = str.includes('linkedin');
+    if (platformOrUrl) {
+      const str = String(platformOrUrl).toLowerCase();
+      if (str.includes('linkedin')) detectedPlatform = 'linkedin';
+      else if (str.includes('coursera')) detectedPlatform = 'coursera';
+      else if (str.includes('lnt')) detectedPlatform = 'lnt';
+    }
+    const isLinkedIn = detectedPlatform === 'linkedin';
     speedControlCard.style.display = isLinkedIn ? 'block' : 'none';
   }
 
   function updateSpeedUi(speed) {
-    const num = Number(speed) || 100;
+    const num = Math.min(16.0, Math.max(0.5, Number(speed) || 16));
     speedButtons.forEach(btn => {
       const btnSpeed = Number(btn.getAttribute('data-speed'));
-      if (btnSpeed === num) {
+      if (Math.abs(btnSpeed - num) < 0.05) {
         btn.classList.add('active');
       } else {
         btn.classList.remove('active');
@@ -194,7 +201,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   speedButtons.forEach(btn => {
     btn.addEventListener('click', () => {
-      const speed = Number(btn.getAttribute('data-speed')) || 100;
+      const speed = Number(btn.getAttribute('data-speed')) || 16;
       updateSpeedUi(speed);
       chrome.storage.local.set({ linkedInPlaybackRate: speed });
       addLog(`⚡ Speed set to ${speed}x`, 'info');
@@ -225,7 +232,7 @@ document.addEventListener('DOMContentLoaded', () => {
   chrome.storage.local.get(['hasStarred', 'activeCourseState', 'isRunning', 'linkedInPlaybackRate'], (res) => {
     hasStarred = Boolean(res.hasStarred);
     updateStarBadgeUi();
-    const storedSpeed = Number(res.linkedInPlaybackRate) || 100;
+    const storedSpeed = Math.min(16.0, Math.max(0.5, Number(res.linkedInPlaybackRate) || 16));
     updateSpeedUi(storedSpeed);
     if (!hasStarred) {
       starGateModal.style.display = 'flex';

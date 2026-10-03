@@ -245,19 +245,34 @@
     attrObserver.observe(document.documentElement, { attributes: true });
   }
 
-  // Catch site ratechange fightback in document capture phase
-  document.addEventListener('ratechange', (e) => {
+  // Window & Document capture listener: completely hide custom high speeds from LinkedIn Learning's player scripts
+  const handleRateChangeCapture = (e) => {
     const desired = getDesiredSpeed();
-    if (desired !== null && e.target && e.target.tagName === 'VIDEO' && !isWritingSpeed) {
+    if (desired !== null && e.target && e.target.tagName === 'VIDEO') {
       const v = e.target;
-      protectVideoElement(v);
-      if (Math.abs(v.playbackRate - desired) > 0.05) {
+      // If the video already matches our desired rate, suppress propagation so LinkedIn never sees it
+      if (Math.abs(v.playbackRate - desired) <= 0.05) {
+        if (typeof e.stopImmediatePropagation === 'function') {
+          e.stopImmediatePropagation();
+        }
+        return;
+      }
+
+      // If site player tried to force an unwanted speed (e.g. 2.0x), stop propagation and re-assert desired speed
+      if (!isWritingSpeed) {
+        if (typeof e.stopImmediatePropagation === 'function') {
+          e.stopImmediatePropagation();
+        }
         isWritingSpeed = true;
         try {
+          protectVideoElement(v);
           if (nativeSetPlaybackRate) {
             nativeSetPlaybackRate.call(v, desired);
           } else {
             v.playbackRate = desired;
+          }
+          if (nativeSetDefaultPlaybackRate) {
+            nativeSetDefaultPlaybackRate.call(v, desired);
           }
         } catch (err) {}
         finally {
@@ -265,7 +280,10 @@
         }
       }
     }
-  }, true);
+  };
+
+  window.addEventListener('ratechange', handleRateChangeCapture, true);
+  document.addEventListener('ratechange', handleRateChangeCapture, true);
 
   // Re-assert desired speed on lifecycle media events
   ['play', 'loadedmetadata', 'canplay', 'loadstart', 'timeupdate', 'seeking', 'seeked'].forEach((evtName) => {

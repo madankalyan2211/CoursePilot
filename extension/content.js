@@ -37,8 +37,8 @@
   const isLinkedIn = !isCoursera && !isLnt && window.location.hostname.includes('linkedin.com');
   const platformName = isLnt ? 'L&T EduTech' : (isCoursera ? 'Coursera' : 'LinkedIn Learning');
 
-  // Configurable LinkedIn Learning settings (Default: 100x)
-  const LINKEDIN_PLAYBACK_RATE_DEFAULT = 100.0;
+  // Configurable LinkedIn Learning settings (Default: 16x safe native rate)
+  const LINKEDIN_PLAYBACK_RATE_DEFAULT = 16.0;
   let linkedInPlaybackRate = LINKEDIN_PLAYBACK_RATE_DEFAULT;
 
   // WeakMap tracking for LinkedIn video playback controllers (one per video element)
@@ -1050,35 +1050,21 @@
       const currentKey = getVideoIdentifier(video);
 
       // ---------------------------------------------------------
-      // LinkedIn Learning: Dedicated Native High-Speed Controller
-      // (Video Speed Controller Architecture)
+      // Universal High-Speed Fast-Forward & Completion Engine
+      // (Supports LinkedIn Learning, Coursera & L&T EduTech)
       // ---------------------------------------------------------
       if (isLinkedIn) {
         installLinkedInVideoObserver();
-
         const controller = ensureLinkedInController();
-        if (!controller) return;
-
-        // 1. Enforce effective playback rate if site silently reset it
-        const targetRate = Math.min(16.0, Math.max(0.0625, Number(linkedInPlaybackRate) || 16.0));
-        if (Math.abs(video.playbackRate - targetRate) > 0.05) {
-          controller.requestedRate = linkedInPlaybackRate;
-          controller.applySpeed();
+        if (controller) {
+          const targetRate = Math.min(16.0, Math.max(0.0625, Number(linkedInPlaybackRate) || 16.0));
+          if (Math.abs(video.playbackRate - targetRate) > 0.05) {
+            controller.requestedRate = linkedInPlaybackRate;
+            controller.applySpeed();
+          }
         }
-
-        // 2. Check completion
-        controller.checkCompletion();
-
-        // 3. Ensure playing if not ended or completed
-        if (video.paused && !video.ended && !controller.completed) {
-          video.play().catch(() => {});
-        }
-        return;
       }
 
-      // ---------------------------------------------------------
-      // Coursera & L&T EduTech: Preserved Fast-Forward Engine
-      // ---------------------------------------------------------
       if (currentKey !== activeVideoKey) {
         activeVideoKey = currentKey;
         hasSeekedCurrentVideo = false;
@@ -1087,14 +1073,21 @@
         syncStateToStorage();
       }
 
-      const targetTime = Math.max(0, duration - seekOffset);
+      const effectiveSeekOffset = Math.min(seekOffset || 2.5, 3.0);
+      const targetTime = Math.max(0, duration - effectiveSeekOffset);
 
       if (!hasSeekedCurrentVideo && video.currentTime < targetTime - 0.5) {
         if (video.readyState >= 1) {
           video.muted = true;
           video.defaultMuted = true;
           try { video.volume = 0; } catch (e) {}
-          try { video.playbackRate = 16.0; } catch (e) {}
+
+          const effectiveSpeed = isLinkedIn
+            ? Math.min(16.0, Math.max(1.0, Number(linkedInPlaybackRate) || 16.0))
+            : 16.0;
+
+          try { video.playbackRate = effectiveSpeed; } catch (e) {}
+          try { video.defaultPlaybackRate = effectiveSpeed; } catch (e) {}
 
           video.currentTime = targetTime;
           video.dispatchEvent(new Event('seeking', { bubbles: true }));
@@ -1107,7 +1100,7 @@
 
           hasSeekedCurrentVideo = true;
           const details = getPageDetails();
-          logToPopup(`▶ ${details.lessonTitle}: Skipped to ${targetTime.toFixed(1)}s / ${duration.toFixed(1)}s`, 'info');
+          logToPopup(`▶ ${details.lessonTitle}: Fast-forwarded to ${targetTime.toFixed(1)}s / ${duration.toFixed(1)}s (${effectiveSpeed}x)`, 'info');
         }
         return;
       }
@@ -1119,7 +1112,7 @@
 
       // 6. Check Completion
       const isNaturalEnd = video.ended || video.currentTime >= Math.max(0, duration - 0.6);
-      const isTocCompleted = isMarkedCompletedInToc();
+      const isTocCompleted = isLinkedIn ? isCurrentLessonCompletedOnLinkedIn() : isMarkedCompletedInToc();
 
       if (hasSeekedCurrentVideo && (isNaturalEnd || isTocCompleted)) {
         if (!videoCompletedTimestamp) {
@@ -1127,7 +1120,8 @@
         }
 
         const elapsedSinceEnd = Date.now() - videoCompletedTimestamp;
-        const requiredWait = isTocCompleted ? 400 : 2500;
+        // Wait 500ms if TOC item already shows completed green check, or 1400ms for tracking ping
+        const requiredWait = isTocCompleted ? 500 : 1400;
 
         if (elapsedSinceEnd >= requiredWait) {
           if (lastCompletedVideoKey !== currentKey) {
